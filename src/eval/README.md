@@ -47,6 +47,7 @@ Events are departures from ATL/DFW (DEP_DELAY > 45) and arrivals at ATL/DFW (ARR
 ```
 python src/eval/baselines_events.py [--events <parquet>]     # B0-B3 -> event_baseline_metrics.csv, outputs/predictions/event_baseline_preds.csv
 python src/eval/evaluate_events.py --preds <csv> --name <tag>  # model vs best baseline -> event_model_vs_baseline_<tag>.csv, event_calibration_<tag>.csv
+python src/eval/failure_cases.py [--preds <csv> --name <tag>]  # missed storm + false alarm -> failure_cases_<tag>.md (default B3)
 ```
 
 **Baselines, h = 3, all test events** (top 15% = 856 flags):
@@ -78,6 +79,41 @@ python src/eval/evaluate_events.py --preds <csv> --name <tag>  # model vs best b
 - **ATL:** +1% / +2% / −4% / −1%. There is no gain at any h.
 - **The model is flat across h,** so it gets nothing from fresher weather.
 - **Calibration:** both the model and B3 under-predict the lower bins by 2–4 points, because 2025 has a higher delay rate (13.2% vs 10.0% in train).
+
+### Failure cases (`failure_cases.py` → `failure_cases_<name>.md`, h = 3)
+B3 and P3 v1 fail on **the same two days**.
+
+**Missed storm: DFW, 2025-04-23**
+- 11 events, 9 of them late by more than 45 minutes (82%). B3 expected 1.6 late events and P3 1.9.
+- The first five late events, between 08:10 and 13:39, had *overcast, no adverse weather* at t − 3h.
+- A thunderstorm shows up at the scheduled time only at 12:00, so convection formed less than 3 h ahead.
+- BTS cause minutes on the late events: late aircraft 574, weather 243, NAS 139, carrier 51. That points to delay propagating in from upstream airports and earlier rotations.
+- **Fix:**
+  - TAF or convective-outlook features;
+  - inbound-aircraft and origin-airport delay;
+  - hub state (recent *actual* delays). The hub was already running late by 09:00, which would have raised the afternoon risk.
+- **How a controller notices:** the dashboard shows low risk while the live delay feed is red. So the dashboard should show "observed delays in the last 2 h" next to the forecast.
+
+**False alarm: DFW, 2025-05-30**
+- 22 events, 0 late. B3 flagged 9 in the top 15%; P3 flagged 4.
+- The weather at t − 3h was adverse on 73% of events. It was light rain plus a **17–30 km/h tailwind on the assumed runway heading 180°**.
+- A wind from the north is a tailwind on 18 but a headwind on 36. DFW simply operates in north flow, so the fixed-heading rule misfires.
+- Evidence across all events: "tailwind only" triggers have a delay rate of 0.135 in train and 0.145 in test. That is close to normal weather (0.087 / 0.117) and far below fog/rain codes (0.153 / 0.202) and thunderstorms (0.348 / 0.300).
+- In 2025 test, "tailwind only" accounts for 703 of the 1,458 events that the adverse rule fires on (48%).
+- **Fix:** take the minimum tailwind over both runway ends (the airport picks its runway direction), and separate light rain from convection.
+
+### Leakage review v2 (P1 `b064886`, P3 v1 `b27ba59`): no leak found
+| file:line | check | result |
+|---|---|---|
+| p1 `src/data/events.py:63-64` | flights-CSV weather `*_ORIGIN/*_DEST` | kept only as `oracle_*`; P3 excludes them with an assert (`train.py:54-59`) ✅ |
+| p1 `src/data/events.py:49-50,77-79` | DEP_DELAY / ARR_DELAY / CANCELLED / DIVERTED | used only to build `delay_min`, `label_45`, `cancelled`, `diverted` (targets) ✅ |
+| p1 `src/data/build_events.py:37` + `hourly_weather.py:50` | weather join shifted ≥ h before *scheduled* time | cutoff = t − h, and a row counts as available at time_utc + 1 h. In the data, `feature_obs_time ≤ t − h` on 100% of rows with weather (the 2 failing rows are the first events of 2023-01-01 at h = 12, which have no earlier weather, so NaN) ✅ |
+| p1 `hourly_weather.py:31,50` | UTC/local, DST | Against Meteostat (P4 cache), organiser row T equals Meteostat T + 1 h (the METAR at about T:52) on 66% of hours. Any other offset from −7 to +2 h matches ≤ 1.3%, with similar rates in DST and standard time. So the file is true UTC, and the +1 h availability lag is *needed* and sufficient. `events.py:73` turns DST-ambiguous local times into NaT; 0 events dropped ✅ |
+| p1 `hourly_weather.py:40-46` | rolling windows including the target hour | lags are shift(k) on a complete grid; `prcp_sum_6h` covers (T − 6 h, T] at row T, which is available at T + 1 h ≤ t − h ✅ |
+| p1 `events.py:80-82` | calendar | hour/dow/month from the *scheduled* local time ✅ |
+| p3 `train.py:37,49-50,78-83` | target encodings / tuning on test | no target encoding; early stopping and threshold on 2024-H2 validation. The test split is on UTC, so it is a superset of FL_DATE 2025 and no test event reaches training ✅ |
+| p1 `hourly_weather.py:36` | minor | duplicate `time_utc` rows silently keep the first; log the count |
+| p1 `events.py:78` | minor | diverted *departures* keep a label (DEP_DELAY is known); P4 drops them (78 events) and P3 trains on them. This is a consistency issue, not a leak |
 
 The v1 sections below use the old flight table and Meteostat weather. They are kept only for history.
 
