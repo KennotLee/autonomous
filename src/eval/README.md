@@ -37,6 +37,7 @@ Needs P1's `data/processed/*.parquet` (branch `p1`), `config/airports.yaml`, the
 | `cross_airport.py` | AAR model trained on one hub, scored on the other (no `icao` input) vs within-airport | `aar_cross_airport.csv` |
 | `summarize.py` | builds the test-set summary tables | `test_set_summary.md` |
 | — | problem statement, before/after workflow, sourced cost figures | `problem_framing.md` |
+| — | 8-slide outline, 3-min script with [PLACEHOLDER] model numbers, dashboard QA checklist | `pitch.md` |
 
 ## Findings v2: event-level delay > 45 min (organiser update, P1 `event_features.parquet`)
 Events are departures from ATL/DFW (DEP_DELAY > 45) and arrivals at ATL/DFW (ARR_DELAY > 45).

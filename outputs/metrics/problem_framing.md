@@ -1,35 +1,35 @@
-# Problem framing (P4, Task 2)
+# Problem framing (P4, Task 5; updated for the organiser's main target: per-flight delay > 45 min)
 
-## Problem statement
+## User
+- **Primary user:** the airline operations-control **duty manager** for the ATL or DFW hub. They decide hours ahead which departures and arrivals to protect, swap, re-crew or pre-cancel.
+- **Secondary user:** the FAA **traffic management coordinator (TMC)** at the tower or TRACON. They set the arrival rate and request Ground Delay Programs (GDPs) from the FAA Command Center (ATCSCC) [S1].
 
-1. At Atlanta (ATL) and Dallas/Fort Worth (DFW), a traffic management coordinator (TMC) in the tower or TRACON sets the hourly Airport Acceptance Rate (AAR) from experience and weather forecasts. The FAA Command Center (ATCSCC) then turns any hour where demand exceeds that rate into a Ground Delay Program (GDP), or, once the weather has already hit, a Ground Stop [S1, S2].
-2. FAA training material calls predicting capacity from weather forecasts "very subjective", and says ground stops "are issued at the time of the constraint and are rarely, if ever, issued for a start time in the future" [S2]. The decision that matters is made by judgment, and the fallback is purely reactive.
-3. Weather is the main cause of the problem:
-   - NOAA's Aviation Weather Center, citing the FAA, attributes "as much as 67%" of national airspace delay to weather, at roughly USD 23 billion a year [S3].
-   - In our 2023–25 BTS sample, 73.9% of cancelled ATL/DFW flights carry the weather cancellation code [D1].
-4. Decisions made late push delay into the air:
-   - A narrowbody burns about 35 kg of fuel per minute in arrival management (holding and sequencing), against about 12 kg/min taxiing and none parked at the gate [S4].
-   - US airlines' average cost is $98.41 per block minute [S5].
-5. We give the TMC and the airline operations duty manager a forecast made 3–12 hours ahead:
-   - hourly arrivals with an uncertainty band;
-   - each flight's risk of arriving more than 45 minutes late;
-   - the rule and timestamped evidence behind every recommendation.
-   
-   They can then set rates and programs earlier. **The human decides; the model advises.**
+## Problem statement (5 sentences)
+1. At ATL and DFW, the airline duty manager has to decide hours ahead which flights to protect, but the usual trigger is an FAA Ground Delay Program or Ground Stop issued once weather is already constraining the airport [S1, S2].
+2. FAA training material itself calls capacity prediction from weather forecasts "very subjective" and says ground stops "are issued at the time of the constraint and are rarely, if ever, issued for a start time in the future" [S2].
+3. Weather accounts for "as much as 67%" of US airspace delay, roughly USD 23 billion a year [S3]. In our 2025 test data, 13.2% of ATL/DFW departures and arrivals were more than 45 minutes late [D2].
+4. Reacting late is expensive: a block minute costs a US airline USD 98.41 [S5], and delay absorbed in airborne arrival management burns about 35 kg of fuel per minute against about 0 at the gate [S4].
+5. We give the duty manager each flight's probability of a delay over 45 minutes, 3–12 hours ahead, using only weather observed at least h hours before the scheduled time; every flag shows its drivers and the weather timestamp, and **the human decides**.
 
 ## Before vs after
 
 **Before (today)**
-- The TMC sets the AAR by experience. The starting point is a baseline rate from the FAA's performance metrics, adjusted for runways in use, weather and navigation-aid limits [S1]. The rate is agreed by consensus among the tower, TRACON, Center and ATCSCC [S1].
-- A GDP is modelled in the Flight Schedule Monitor (FSM) software once forecast demand clearly exceeds the AAR. Flights get departure slot times (EDCTs), and the rate is revised as the weather unfolds [S1, S2].
-- If storms arrive earlier or stronger than forecast, the fallback is a Ground Stop issued at the moment of the constraint [S2]. Flights already in the air absorb the delay as airborne holding, the most expensive kind [S4, S6].
-- The airline duty manager learns which flights are hit only when EDCTs or the Ground Stop arrive. That leaves little time to swap aircraft, re-crew or cancel early.
+- Disruption shows up as FAA programs. The TMC sets the arrival rate from experience and the published baseline. ATCSCC issues a GDP, with departure slot times (EDCTs), once demand clearly exceeds that rate. If storms arrive early, it issues a Ground Stop at the moment of the constraint [S1, S2].
+- The airline duty manager mostly finds out which flights are hit when the EDCTs or the Ground Stop arrive. By then aircraft swaps, re-crewing and early cancellations are expensive or impossible.
+- The only forward-looking tool is judgment: "storms are forecast, so expect trouble this evening." It isn't tied to specific flights and isn't checked afterwards [S2].
+- Late reaction pushes delay into the most expensive places: taxiing and airborne holding cost about €47–83 per minute, against about €18 at the gate (strategic, 2022 prices) [S6].
 
 **After (with our tool)**
-- 3–12 hours ahead, the dashboard shows forecast hourly arrivals at ATL/DFW with a P10–P90 band, alongside scheduled demand. Runway crosswind and tailwind are computed against the configured runway heading.
-- Every hour where the forecast falls below scheduled demand is flagged, showing the rule that fired and the timestamped weather it used. That gives the TMC evidence for an earlier, smoother GDP rate inside the 5–6 hour decision window the FAA already plans around [S2].
-- Flights are ranked by their risk of arriving more than 45 minutes late, with the top contributing factors shown. The airline duty manager can then protect connections, swap aircraft or re-crew before the EDCTs arrive.
-- **The human decides.** The TMC accepts, edits or rejects each flag, and the decision is logged with the forecast version. After the event, forecast is compared with actual so trust is earned, not assumed.
+- 3, 6, 9 or 12 hours ahead, every departure and arrival at ATL/DFW gets a probability of being more than 45 minutes late. The duty manager works from a ranked list instead of a hunch.
+- Each flag shows why: historical rate for that airport, direction, hour and month; the weather observation used (with its UTC timestamp); and the top model drivers. The duty manager can check the evidence in seconds.
+- **The human decides.** The duty manager accepts, overrides or ignores each flag, and the decision is logged with the forecast version. Nothing acts on its own.
+- After the day, forecast vs actual (including misses like DFW 2025-04-23) is visible, so trust is earned, not assumed. The same pipeline runs for any configured airport code.
+
+## Our data figures
+| ID | Figure | Source |
+|---|---|---|
+| D2 | 2025 test set: 5,704 ATL/DFW events (departures + arrivals), 753 (13.2%) late by more than 45 minutes. Train 2023–24: 19,480 events, 10.0% late. | `baselines_events.py` on P1 `event_features.parquet` |
+| D3 | Best transparent baseline (history × adverse-weather rule at t − 3h): PR-AUC 0.215 against 0.132 for a constant guess. | `event_baseline_metrics.csv` |
 
 ## Cost and context figures
 
