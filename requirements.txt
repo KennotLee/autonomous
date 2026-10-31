@@ -3,3 +3,5 @@ pyarrow
 numpy
 meteostat==1.7.6
 pyyaml
+lightgbm
+pytest

@@ -20,3 +20,22 @@ airports:
     timezone: America/Chicago
     meteostat:
       lookup: icao
+
+# Other airports on hub flights are resolved automatically: ICAO = 'K'+IATA, else 'P'+IATA, if that
+# ICAO exists in the Meteostat station list (timezone taken from Meteostat). Exceptions below were
+# checked against Meteostat Stations().fetch() on 2026-10-31.
+iata_icao_overrides:
+  SJU: {icao: TJSJ}
+  OGG: {icao: PHOG}
+  STT: {icao: TIST}
+  STX: {icao: TISX}
+  FCA: {icao: KGPI}
+  # Lawton-Fort Sill Regional: KLAW is not in Meteostat -> no weather (NaN), timezone given here.
+  LAW: {icao: KLAW, timezone: America/Chicago, meteostat: false}
+
+meteostat:
+  weather_start: "2022-12-30"   # >= 18 h before first flight for 12 h horizon + 6 h rolling window
+  weather_end: "2025-08-02"
+  asof_tolerance_hours: 2
+  horizons: [3, 6, 9, 12]
+  rolling_windows_hours: [3, 6]

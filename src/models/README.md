@@ -4,6 +4,10 @@ Inputs (team contract, column names fixed; full details in CLAUDE.md):
 - data/processed/hourly_features.parquet: icao, target_hour_utc, h, feature_obs_time, [weather + wind component + rolling + calendar features], arr_count
 - data/processed/flight_features.parquet: flight_id, origin_icao, dest_icao, sched_time_utc, h, feature_obs_time, [origin_* and dest_* features], delay_min, label_45
 
+flight_features.parquet also has cancelled and diverted (0/1) columns; delay_min and label_45 are NaN for cancelled/diverted flights.
+
 h ∈ {3,6,9,12}; all non-oracle features observed at or before target time − h. Columns prefixed `oracle_` are same-hour weather for oracle comparison only — never train production models on them.
 
-Outputs: outputs/predictions/aar_preds.csv and outputs/predictions/delay_preds.csv — schema "TBD, pending P1/team agreement; see CLAUDE.md".
+Outputs:
+- outputs/predictions/aar_preds.csv — columns: icao (str, e.g. KATL), target_hour_utc (ISO-8601 UTC timestamp, hour start), h (int hours ahead, one of 3,6,9,12), pred_arr_count (float, predicted arrivals in that UTC hour)
+- outputs/predictions/delay_preds.csv — columns: flight_id (str, matches data/processed/flight_features.parquet), sched_time_utc (ISO-8601 UTC, scheduled departure), h (int, one of 3,6,9,12), p_delay45 (float 0–1, probability arrival delay > 45 min)
