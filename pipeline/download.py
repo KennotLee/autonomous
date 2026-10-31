@@ -22,6 +22,8 @@ BTS_URL = ("https://transtats.bts.gov/PREZIP/"
 # Canonical (BTS download-tool) names -> PREZIP names. Both spellings are accepted.
 FLIGHT_COLS = {
     "FL_DATE": "FlightDate", "OP_UNIQUE_CARRIER": "Reporting_Airline",
+    "OP_CARRIER_FL_NUM": "Flight_Number_Reporting_Airline", "TAIL_NUM": "Tail_Number",
+    "DISTANCE": "Distance",
     "ORIGIN": "Origin", "DEST": "Dest",
     "CRS_DEP_TIME": "CRSDepTime", "DEP_TIME": "DepTime", "DEP_DELAY": "DepDelay",
     "CRS_ARR_TIME": "CRSArrTime", "ARR_TIME": "ArrTime", "ARR_DELAY": "ArrDelay",
