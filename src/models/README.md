@@ -65,8 +65,8 @@ The model is loaded once and cached. Inputs must contain every column in
   LightGBM early-stops on val; it is then refit on train + val with the best iteration count, and the
   historical average is refit on train + val too, before scoring 2025. `--no-refit` scores test with
   the train-only fits.
-- **Persistence:** arrivals in the last UTC hour that had fully ended by `feature_obs_time`
-  (`[floor(obs) − 1h, floor(obs))`). Taken from P1's column once `PERSISTENCE_COLUMN` is set;
+- **Persistence:** arrivals in the last UTC hour that had fully ended by the prediction time `t − h`
+  (`[t − h − 1h, t − h)`; P1's `feature_obs_time` is the weather stamp and may lag). Taken from P1's column once `PERSISTENCE_COLUMN` is set;
   until then derived from past `arr_count` rows of the panel. Absent hours give NaN, not 0.
 - **Historical average:** mean `arr_count` by (icao, local hour, local day of week), each hour
   counted once across horizons, fit on training rows only. Unseen groups fall back to
@@ -80,9 +80,9 @@ The model is loaded once and cached. Inputs must contain every column in
 
 - Validation fails if any row has `feature_obs_time > target_hour_utc − h`, duplicate keys, off-hour
   timestamps, unknown horizons or airports.
-- Never inputs: `arr_count`, `capacity_ratio`, `mean_arr_delay`, `share_delayed_45`, `cancellations`,
+- Never inputs: `arr_count`, `capacity_ratio`, `mean_arr_delay`, `share_delayed_45`, `cancellations`, `diversions`,
   any `oracle_*` or `arr_count*` column, and (conservatively) any column whose name contains
-  `delay`, `cancel`, `divert` or `capacity`. If P1 confirms such a column is observed before
+  `delay`, `cancel`, `divert`, `divers` or `capacity`. If P1 confirms such a column is observed before
   `feature_obs_time`, add it to `ALLOWED_OVERRIDES`. Every dropped column and the reason are saved
   in `preprocessor.json`.
 - Calendar features come only from the target hour itself, which is known when the forecast is issued.

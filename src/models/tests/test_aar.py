@@ -39,6 +39,7 @@ def make_panel(start="2024-05-01", end="2025-02-15", seed=0) -> pd.DataFrame:
                 "mean_arr_delay": rng.normal(10, 5, len(hours)),
                 "share_delayed_45": rng.random(len(hours)),
                 "cancellations": rng.poisson(0.1, len(hours)),
+                "diversions": rng.poisson(0.05, len(hours)),
                 "oracle_wspd": wind,
                 "oracle_arr_hint": arr,
             }))
@@ -109,11 +110,15 @@ def test_persistence_reads_last_completed_hour_only():
     expected = pd.Series(np.arange(48.0) - 4).where(lambda s: s >= 0)
     pd.testing.assert_series_equal(pred.reset_index(drop=True), expected, check_names=False)
 
-    # Mid-hour observation time: hour containing it is not complete, so step back further.
+    # A lagging weather stamp must not move the arrivals reference point (t - h).
     rows2 = rows.copy()
-    rows2[cfg.OBS_TIME] = rows2[cfg.OBS_TIME] - pd.Timedelta(minutes=30)
+    rows2[cfg.OBS_TIME] = rows2[cfg.OBS_TIME] - pd.Timedelta(hours=2)
     pred2, _ = persistence(rows2, rows)
-    assert pred2.iloc[10] == 5.0
+    pd.testing.assert_series_equal(pred, pred2)
+
+    # h = 12: issued at i-12, last completed hour is i-13.
+    pred12, _ = persistence(rows.assign(h=12), rows)
+    assert pred12.iloc[20] == 7.0
 
 
 def test_hist_avg_matches_training_group_means(panel):

@@ -75,6 +75,7 @@
     "mean_arr_delay": "excluded: realised outcome",
     "share_delayed_45": "excluded: realised outcome",
     "cancellations": "excluded: realised outcome",
+    "diversions": "excluded: realised outcome",
     "capacity_ratio": "excluded: realised outcome",
     "oracle_temp_c": "excluded prefix (oracle_/arr_count)",
     "oracle_dwpt_c": "excluded prefix (oracle_/arr_count)",

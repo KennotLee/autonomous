@@ -6,18 +6,16 @@ from .aar_features import add_calendar
 
 
 def issue_time(df: pd.DataFrame) -> pd.Series:
-    """Latest instant whose information may be used for each row."""
-    if cfg.OBS_TIME in df:
-        return df[cfg.OBS_TIME]
+    """Prediction time t - h. (feature_obs_time is P1's weather stamp, which may lag t - h by up to 2 h.)"""
     return df[cfg.TIME] - pd.to_timedelta(df["h"], unit="h")
 
 
 def persistence(df: pd.DataFrame, panel: pd.DataFrame) -> tuple[pd.Series, str]:
-    """Arrivals in the last hour that had fully ended by each row's issue time.
+    """Arrivals in the last hour that had fully ended by the prediction time t - h.
 
     Uses P1's column if cfg.PERSISTENCE_COLUMN is set. Otherwise looks up the realised
-    arr_count of hour [floor(issue) - 1h, floor(issue)) in `panel`. That hour ends at or
-    before the issue time, so only past observations are used; this is asserted below.
+    arr_count of hour [floor(t - h) - 1h, floor(t - h)) in `panel`. That hour ends at or
+    before the prediction time, so only past observations are used; this is asserted below.
     Hours absent from the panel give NaN (never filled with a guess).
     """
     if cfg.PERSISTENCE_COLUMN:
@@ -34,7 +32,7 @@ def persistence(df: pd.DataFrame, panel: pd.DataFrame) -> tuple[pd.Series, str]:
     )
     lookup = pd.MultiIndex.from_arrays([df["icao"], lag_hour])
     values = observed.reindex(lookup).to_numpy(dtype="float64")
-    return pd.Series(values, index=df.index), "derived: panel arr_count of last completed hour before feature_obs_time"
+    return pd.Series(values, index=df.index), "derived: panel arr_count of last completed hour before t - h"
 
 
 class HistoricalAverage:

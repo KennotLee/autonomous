@@ -34,9 +34,9 @@ TEST_START = pd.Timestamp("2025-01-01", tz="UTC")
 #   * prefixed arr_count (the target or anything derived from it),
 #   * named like a realised outcome (delay/cancel/divert/capacity), unless P1 confirms the
 #     column is observed at or before feature_obs_time and it is added to ALLOWED_OVERRIDES.
-EXCLUDED_COLUMNS = {"arr_count", "capacity_ratio", "mean_arr_delay", "share_delayed_45", "cancellations"}
+EXCLUDED_COLUMNS = {"arr_count", "capacity_ratio", "mean_arr_delay", "share_delayed_45", "cancellations", "diversions"}
 EXCLUDED_PREFIXES = ("oracle_", "arr_count")
-SUSPICIOUS_TOKENS = ("delay", "cancel", "divert", "capacity")
+SUSPICIOUS_TOKENS = ("delay", "cancel", "divert", "divers", "capacity")
 ALLOWED_OVERRIDES: set[str] = set()
 
 # Columns that are identifiers/timestamps, never features. icao and h ARE features.
