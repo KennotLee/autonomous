@@ -83,8 +83,13 @@ def download_bts(iatas: list[str], start: str, end: str, workers: int = 4) -> No
 
 
 def download_weather(icao: str, start: str, end: str) -> pd.DataFrame:
-    """Hourly Meteostat observations for one airport, indexed by UTC hour."""
+    """Hourly Meteostat observations for one airport, indexed by UTC hour.
+    Needs meteostat >= 2 (requirements.txt pins 1.7.6 for src/data)."""
     import meteostat as ms
+
+    if int(ms.__version__.split(".")[0]) < 2:
+        raise RuntimeError(f"pipeline.download needs meteostat>=2 (installed {ms.__version__}); "
+                           "use a separate env, or pass --skip-weather (the delay model only needs BTS)")
 
     a = get_airport(icao)
     out = RAW / "weather" / f"{a.icao}.parquet"
@@ -121,9 +126,10 @@ def main(argv=None):
     p.add_argument("--start", default="2023-01")
     p.add_argument("--end", default="2025-07")
     p.add_argument("--skip-bts", action="store_true")
+    p.add_argument("--skip-weather", action="store_true")
     p.add_argument("--workers", type=int, default=4)
     args = p.parse_args(argv)
-    for icao in args.airports:
+    for icao in [] if args.skip_weather else args.airports:
         download_weather(icao, args.start, args.end)
     if not args.skip_bts:
         download_bts([get_airport(c).iata for c in args.airports], args.start, args.end, args.workers)

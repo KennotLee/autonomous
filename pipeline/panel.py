@@ -71,8 +71,15 @@ def build_panel(flights: pd.DataFrame, airport: Airport) -> pd.DataFrame:
       n_sev                   scheduled arrivals that hour that were >45 min late,
                               cancelled or diverted (all three are "severe" for the user)
       n_cancel_arr, arr_delay_sum, n_arr_completed, dep_delay_sum, n_dep_completed
+      n_sev_act, arr_delay_sum_act, dep_delay_sum_act
+                              the same outcomes bucketed by the hour the flight actually
+                              arrived / departed (denominators act_arr / act_dep)
     act_arr is the AAR proxy: true FAA AAR (ASPM) isn't public. It equals
     min(demand, capacity), so it only measures capacity when demand is high.
+
+    Columns bucketed by scheduled hour describe flights whose outcome may come
+    hours later, so they are targets only. Use the *_act columns (and act_arr,
+    act_dep) for live state: a delay is known once the flight has landed or left.
     """
     if "sched_arr" not in flights:
         flights = add_local_times(flights)
@@ -102,10 +109,11 @@ def build_panel(flights: pd.DataFrame, airport: Airport) -> pd.DataFrame:
     by_sched = arr.groupby("h_sched").agg(
         sched_arr=("sev", "size"), n_sev=("sev", "sum"), n_cancel_arr=("cxl", "sum"),
         arr_delay_sum=("delay", "sum"), n_arr_completed=("done", "sum"))
-    act_arr = arr[completed].groupby("h_act").size().rename("act_arr")
+    by_act = arr[completed].assign(sev_act=(arr.ARR_DELAY > SEVERE_DELAY_MIN).astype(int)).groupby("h_act").agg(
+        act_arr=("delay", "size"), n_sev_act=("sev_act", "sum"), arr_delay_sum_act=("delay", "sum"))
     dep_sched = dep.groupby("h_sched").agg(
         sched_dep=("done", "size"), dep_delay_sum=("delay", "sum"), n_dep_completed=("done", "sum"))
-    act_dep = dep[dep_done].groupby("h_act").size().rename("act_dep")
+    dep_act = dep[dep_done].groupby("h_act").agg(act_dep=("delay", "size"), dep_delay_sum_act=("delay", "sum"))
 
     # Gap-free hourly index over the months that have data. Hours with no
     # flights are genuine zeros; months with no file are excluded entirely.
@@ -113,8 +121,8 @@ def build_panel(flights: pd.DataFrame, airport: Airport) -> pd.DataFrame:
     lo = pd.Timestamp(min(months).start_time).tz_localize(tz).tz_convert("UTC")
     hi = pd.Timestamp(max(months).end_time).tz_localize(tz).tz_convert("UTC").floor("h")
     idx = pd.date_range(lo, hi, freq="h", name="hour_utc")
-    panel = pd.concat([by_sched, act_arr, dep_sched, act_dep], axis=1).reindex(idx).fillna(0)
-    panel = panel.astype({c: int for c in panel.columns if not c.endswith("_sum")})
+    panel = pd.concat([by_sched, by_act, dep_sched, dep_act], axis=1).reindex(idx).fillna(0)
+    panel = panel.astype({c: int for c in panel.columns if "_sum" not in c})
 
     local = idx.tz_convert(tz)
     covered = pd.PeriodIndex(local.tz_localize(None), freq="M").isin(months)

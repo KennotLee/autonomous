@@ -78,7 +78,7 @@ def write_failure_case(fl, thr, out_dir):
     ax.scatter(x[sev], day.p_gbm[sev], marker="X", s=80, color="#d62728", label="model risk h=6, delayed > 45", zorder=3)
     ax.scatter(x[~sev], day.p_gbm[~sev], marker="o", s=50, color="#2ca02c", label="model risk h=6, on time-ish", zorder=3)
     ax.scatter(x, day.p_gbm_oracle, marker="s", s=25, facecolors="none", edgecolors="#ff7f0e", label="oracle", zorder=3)
-    ax.axhline(thr, color="k", lw=0.8, ls=":", label=f"alert threshold {thr:.2f}")
+    ax.axhline(thr, color="k", lw=0.8, ls=":", label=f"alert threshold {thr:.3f}")
     ax.set(xlim=(-0.5, 23.5), ylim=(0, 1), xlabel=f"hub time (local), {hub} {date:%Y-%m-%d}",
            ylabel="P(delay > 45 min)", title="Failure case: shaded = thunderstorm coded at the hub")
     ax.legend(fontsize=7, loc="upper left")
@@ -89,7 +89,7 @@ def write_failure_case(fl, thr, out_dir):
     with open(out_dir / "delay_failure_case.md", "w") as f:
         f.write(f"# Failure case: {hub} on {date:%Y-%m-%d} (h = {H} h)\n\n")
         f.write("Auto-selected: the test hub-day with the most > 45 min delays scored below the alert "
-                f"threshold ({thr:.2f}) at h = 6.\n\n![timeline](delay_failure_case.png)\n\n")
+                f"threshold ({thr:.3f}) at h = 6.\n\n![timeline](delay_failure_case.png)\n\n")
         f.write("## Flights that day\n\n" + table.to_markdown(index=False) + "\n\n")
         f.write("## Worst-missed hub-days\n\n" + days.head(5).round(3).to_markdown() + "\n\n")
         notes = Path(__file__).with_name("failure_notes.md")

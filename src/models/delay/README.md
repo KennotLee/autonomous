@@ -6,6 +6,8 @@ Per-flight P(`label_45`) = P(arrival delay > 45 min), using P1's label and featu
 # 1. P1's features (branch p1)
 git show origin/p1:data/processed/flight_features.parquet > data/processed/flight_features.parquet
 # 2. Optional, for the hub congestion/state features: full BTS months + hub weather
+#    (hub weather is only for the failure-case chart and needs meteostat>=2;
+#     with the team's meteostat==1.7.6 add --skip-weather)
 python -m pipeline.download
 # 3. Train, evaluate, write outputs (~1 min)
 python -m src.models.delay.train
@@ -16,7 +18,8 @@ python -m src.models.delay.train
 - **P3 additions:**
   - **Thunderstorm / heavy-precipitation flags** at each end, derived from P1's `coco`.
   - **Hub schedule congestion:** scheduled arrivals and departures at ATL/DFW in the hour the flight uses the hub. It comes from the full BTS schedule, which is known in advance; the team CSV is a 0.5% sample and can't measure congestion.
-  - **Hub state** in the last complete hour before t − h: arrival capacity ratio, severe-delay share, cancellation rate, mean arrival and departure delay.
+  - **Hub state** in the last complete hour before t − h: arrival capacity ratio, severe-delay share, mean arrival and departure delay. Delays are counted in the hour each flight actually landed or left, so only delays known by t − h are used. A flight scheduled in that hour may still be in the air, and its delay isn't known yet.
+  - **Not used:** the hub cancellation rate. BTS doesn't record when a flight was cancelled, so it could be counted before it was known. It added nothing on test (PR-AUC 0.298 with it, 0.299 without).
 - Without the BTS files, the script skips the P3 additions and trains on P1 features only.
 
 ## Model and evaluation
@@ -27,6 +30,6 @@ python -m src.models.delay.train
 - **Threshold:** maximum F1 on validation. The trade-off table in the metrics shows other operating points.
 
 ## Outputs
-- `outputs/predictions/delay_preds.csv`: contract columns `flight_id, sched_time_utc, h, p_delay45`, plus `high_risk`, `top_drivers` (the three TreeSHAP log-odds contributions that push risk up), `label_45` and `split`. Rows from train/validation are in-sample.
+- `outputs/predictions/delay_preds.csv`: contract columns `flight_id, sched_time_utc, h, p_delay45`, plus `high_risk`, `top_drivers` (the three TreeSHAP log-odds contributions that push risk up), `label_45` and `split`. Rows from train/validation are in-sample: score only `split == "test"`.
 - `outputs/metrics/delay_metrics.md`, `delay_calibration.png`, `delay_pr_curve.png`.
 - `outputs/metrics/delay_failure_case.md` + `.png`: worst missed day, auto-selected. The narrative comes from `failure_notes.md`.

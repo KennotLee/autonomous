@@ -7,10 +7,14 @@ P1 contract (CLAUDE.md, branch p1): one row per flight x h, t = sched_time_utc
 P3 adds, per flight and h, for the hub end (ATL/DFW) of the flight:
   hub_sched_arr / hub_sched_dep  scheduled movements at the hub in the hour the
                                  flight uses it (schedule: known in advance)
-  hub_<ops>                      hub state in the last full hour before t - h:
-                                 capacity ratio, severe-delay share, cancellations,
-                                 mean arrival/departure delay (3 h pooled)
+  hub_<ops>                      hub state in the last full hour before t - h, from
+                                 flights that had landed / left by then: capacity
+                                 ratio and severe-delay share (3 h pooled), mean
+                                 arrival and departure delay (that hour)
   {origin,dest}_ts, _heavy_precip  flags derived from P1's coco
+Cancellation rate is left out: BTS has no cancellation time, so a flight
+cancelled after a long delay could be counted before it was known (and it
+added nothing on test).
 The hub features need the full BTS months (python -m pipeline.download); the
 team CSV is a 0.5% sample, so its own counts can't measure congestion.
 """
@@ -28,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[3]
 P1_FILE = ROOT / "data" / "processed" / "flight_features.parquet"
 BTS_DIR = ROOT / "data" / "raw" / "bts"
 HORIZONS = [3, 6, 9, 12]
-OPS_FEATS = ["cap_ratio_3h", "sev_rate_3h", "cancel_rate_3h", "arr_delay_mean", "dep_delay_mean"]
+OPS_FEATS = ["cap_ratio_3h", "sev_rate_3h", "arr_delay_mean", "dep_delay_mean"]
 COCO_TS = [23, 24, 25, 26, 27]
 COCO_HEAVY = [9, 11, 13, 16, 18, 20, 22, 26]
 

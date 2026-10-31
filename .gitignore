@@ -1,5 +1,14 @@
-data/
+data/raw/
+data/interim/
+data/original_datasets/
+data/processed/dataset.parquet
+data/schema_profile.csv
+data/*.log
+.venv/
 __pycache__/
 *.pyc
-.venv/
+.pytest_cache/
+.env
+.DS_Store
+.ipynb_checkpoints/
 reports/*.parquet

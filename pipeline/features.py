@@ -65,19 +65,23 @@ def weather_state(wx: pd.DataFrame, airport: Airport) -> pd.DataFrame:
 
 
 def ops_state(panel: pd.DataFrame) -> pd.DataFrame:
-    """Per-hour operational state observable once the hour has closed."""
+    """Per-hour operational state observable once the hour has closed.
+
+    Delay outcomes come from flights that actually landed / left in the hour
+    (panel *_act columns); a flight scheduled in the hour may still be in the
+    air or at the gate when it closes, so its delay is not yet known."""
     p = panel
     o = pd.DataFrame(index=p.index)
     o["act_arr"] = p.act_arr
     o["sched_arr"] = p.sched_arr
     o["cap_ratio"] = p.act_arr / p.sched_arr.where(p.sched_arr > 0)
-    o["sev_rate"] = p.n_sev / p.sched_arr.where(p.sched_arr > 0)
-    o["arr_delay_mean"] = p.arr_delay_sum / p.n_arr_completed.where(p.n_arr_completed > 0)
-    o["dep_delay_mean"] = p.dep_delay_sum / p.n_dep_completed.where(p.n_dep_completed > 0)
+    o["sev_rate"] = p.n_sev_act / p.act_arr.where(p.act_arr > 0)
+    o["arr_delay_mean"] = p.arr_delay_sum_act / p.act_arr.where(p.act_arr > 0)
+    o["dep_delay_mean"] = p.dep_delay_sum_act / p.act_dep.where(p.act_dep > 0)
     # 3-hour pooled rates are far less noisy than single hours
-    r = p[["act_arr", "sched_arr", "n_sev", "n_cancel_arr"]].rolling(3, min_periods=1).sum()
+    r = p[["act_arr", "sched_arr", "n_sev_act", "n_cancel_arr"]].rolling(3, min_periods=1).sum()
     o["cap_ratio_3h"] = r.act_arr / r.sched_arr.where(r.sched_arr > 0)
-    o["sev_rate_3h"] = r.n_sev / r.sched_arr.where(r.sched_arr > 0)
+    o["sev_rate_3h"] = r.n_sev_act / r.act_arr.where(r.act_arr > 0)
     o["cancel_rate_3h"] = r.n_cancel_arr / r.sched_arr.where(r.sched_arr > 0)
     return o
 
