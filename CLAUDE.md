@@ -11,7 +11,11 @@ Out of scope for P1: splits, models, baselines, metrics, dashboard.
 - `data/interim/schema_profile.csv` — per-column profile (dtype, % missing, min/max, examples). Not committed.
 - `config/airports.yaml` — per-ICAO runway heading, timezone, meteostat lookup. `src/data/` — P1 pipeline code.
 - `scripts/` — profiling scripts + `run_pipeline.py` entry. Env: `.venv/bin/python`; `pip install -r requirements.txt`.
-- Repo: https://github.com/KennotLee/autonomous (main). Team workflow rules in README.md.
+- `src/data/fetch_weather.py` — standalone METAR/ASOS downloader (IEM archive) for any ICAO + date range;
+  not used by the pipeline. `.venv/bin/python src/data/fetch_weather.py --icao KATL --start 2024-07-01 --end 2024-07-31`.
+  IEM gusts: ~15–18% of reports at KATL/KDFW (vs ~1–3% in Meteostat) → candidate gust source for a v2.
+  IEM routine METAR at HH:52 == Meteostat value stamped HH+1:00 (so Meteostat stamp ≥ true obs time).
+- Repo: https://github.com/KennotLee/autonomous (P1 work on branch `p1`). Team workflow rules in README.md.
 
 ## Verified facts about the raw data (full file, 2026-10-31)
 - 148,273 rows × 123 cols, BTS On-Time Performance + 14 Meteostat-style weather cols.
