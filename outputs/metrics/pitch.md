@@ -13,10 +13,32 @@ All numbers are measured on the 2025 test set (5,704 ATL/DFW departures and arri
 | 2 | **Today & cost** | Ground Stops "issued at the time of the constraint" [S2]; weather is up to 67% of airspace delay, about $23B/yr [S3]; $98.41 per block minute [S5]; 35 kg fuel/min in arrival management vs about 0 at the gate [S4]; 13.2% of 2025 ATL/DFW flights more than 45 min late | problem realism |
 | 3 | **Data & no-leakage design** | Timeline: weather obs ≤ t − h, plus 1 h because a report lands up to 52 min after its stamp. Flights-file weather crossed out. Head/cross/tailwind on runway 080°/180°. Train 2023–24, test 2025. Any airport code; train-on-ATL-test-on-DFW keeps most skill | technical soundness |
 | 4 | **Demo** | DFW, h = 3: recommendations with the rule that fired and the weather timestamp; flight table with risk, "similar flights were late X% (CI)", cautions, and the ⛔ no-forecast decline; decision logged. Then ATL and h = 12 | trust & traceability |
-| 5 | **Results vs baselines** | PR-AUC: constant 0.132, history 0.189, + month 0.198, weather rule 0.215, **model 0.220**. By h: model 0.219–0.222, flat; rule 0.215 → 0.202. Tie at h = 3, +9% at h = 12 (CI > 0). No gain at ATL | honest evaluation |
+| 5 | **Results vs baselines** | PR-AUC: constant 0.132, history 0.189, + month 0.198, weather rule 0.215, **model 0.220**. By h: model 0.219–0.222, flat; rule 0.215 → 0.202. Tie at h = 3, +9% at h = 12 (CI > 0). No gain at ATL. Bonus AAR (arrivals/hour, full BTS): RMSE 6.76 ATL / 8.78 DFW at h = 3, 3.5% / 7.0% below the best schedule baseline; 4–13% below in bad-weather hours | honest evaluation |
 | 6 | **Failure case** | DFW 2025-04-23: 9 of 11 late, model expected about 2; overcast at t − 3h, thunderstorm at 12:00, cause mostly late aircraft. False alarm 2025-05-30: north wind counted as a tailwind on runway 18. How the user knows: "no elevated windows" while live delays rise; the tailwind rule is named | honest evaluation |
 | 7 | **Limitations & next steps** | 0.5% flight sample; observations, not forecasts; one runway heading; no inbound-aircraft delay; alerts on about 1 in 3 flights is too many. Next: TAF/convective forecasts, inbound tail delay, both runway ends, alert budget per shift | honest evaluation |
 | 8 | **Impact** | Measured: 49–53% of severe delays flagged 3–12 h ahead, about 1 in 5 alerts right. Today that warning comes at 0 h. The weather rule alone gets about the same at the same alert count, so the value is the early, traceable workflow; the model adds at 12 h | impact |
+
+## Bonus: arrivals per hour (AAR proxy), for slide 5 and Q&A
+These numbers come from an independent P4 check of P2's leak-fixed model (`19e65a6`, weather available at stamp + 1 h).
+- **Data:** the full BTS data for 2023-01 to 2025-07, 1.64M ATL/DFW arrivals. Test = 2025, 5,088 hours per airport.
+- **Target check:** P4 rebuilt the hourly target from BTS WheelsOn, and it matches P2's on 99.4% of hours.
+- **Baseline:** the best schedule baseline (`sched_spread`) spreads the published schedule over the 2023–24 landing-hour pattern. It has RMSE 7.01 at ATL and 9.44 at DFW. P2's own best baselines are weaker (8.68 / 10.68).
+- Source: `outputs/metrics/aar_bts_model_vs_baseline.csv`.
+
+| airport | h | model RMSE | vs best schedule baseline (90% CI of RMSE diff) |
+|---|---|---|---|
+| ATL | 3 | 6.76 | −3.5% [−0.49, −0.03] |
+| ATL | 6–12 | 6.87–6.92 | −1.3% to −2.0% (CI includes 0) |
+| DFW | 3 | 8.78 | −7.0% [−1.04, −0.32] |
+| DFW | 6–9 | 8.92–8.93 | −5.4% to −5.5% (significant) |
+| DFW | 12 | 9.20 | −2.5% [−0.51, +0.02] (CI includes 0) |
+
+- **Where it helps:**
+  - **bad-weather hours:** 4–13% lower error, significant at every h;
+  - **severe-weather hours:** 1–22% lower (the DFW h = 12 CI includes 0);
+  - **normal-weather hours at ATL:** slightly worse, +1% to +3%.
+- **Uncertainty band:** the P10–P90 band covers 69–75% of hours (nominal 80%) and 42–56% in severe weather, so it is too narrow when it matters most.
+- **What to say:** "Arrivals per hour: 1–7% better than reading the schedule well, and 4–13% better in bad-weather hours. Don't quote −21%: that was against weaker baselines."
 
 ## Script (about 420 words, 3:00)
 

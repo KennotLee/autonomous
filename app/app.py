@@ -433,9 +433,9 @@ with tabs[2]:
                 layers += base.mark_point(color="black", filled=True).encode(y="actual_arr_count:Q")
             st.altair_chart(layers.properties(height=280), width="stretch")
             st.caption("Red = forecast, shaded = P10–P90 range, dashed = schedule"
-                       + (", dots = actual" if reveal else "") + ". Measured on 2025: 2–8% lower error than reading "
-                       "the schedule well, 6–26% lower in bad-weather hours; the range is too narrow (covers 69–74%, "
-                       "should be 80%).")
+                       + (", dots = actual" if reveal else "") + ". Measured on 2025 (P2 leak-fixed model): 1–7% lower error than "
+                       "reading the schedule well, 4–13% lower in bad-weather hours; the range is too narrow (covers "
+                       "69–75%, should be 80%).")
 
 # ------------------------------------------------------------------ 4 how it works
 with tabs[3]:
