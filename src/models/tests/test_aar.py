@@ -9,6 +9,7 @@ import pytest
 
 from src.models import aar_config as cfg
 from src.models.aar_baselines import HistoricalAverage, persistence
+from src.models.aar_context import add_schedule_context, origin_weather
 from src.models.aar_data import SchemaError, check, load_airport_timezones, split_chronological, validate_hourly
 from src.models.aar_features import AARPreprocessor, select_feature_columns
 from src.models.aar_metrics import evaluate
@@ -32,7 +33,7 @@ def make_panel(start="2024-05-01", end="2025-02-15", seed=0) -> pd.DataFrame:
                 cfg.OBS_TIME: hours - pd.Timedelta(hours=h),
                 "wspd_obs": wind + rng.normal(0, 2, len(hours)),
                 "crosswind_obs": rng.normal(0, 5, len(hours)),
-                "sched_arrivals": sched,
+                "sched_arr_count": sched,
                 cfg.TARGET: arr,
                 # Leaky columns that must never become features:
                 "capacity_ratio": arr / 3,
@@ -79,7 +80,7 @@ def test_leaky_columns_never_features(panel):
     for col in cfg.EXCLUDED_COLUMNS | {"oracle_wspd", "oracle_arr_hint", cfg.TIME, cfg.OBS_TIME}:
         assert col not in features
         assert col in dropped
-    assert {"icao", "h", "wspd_obs", "crosswind_obs", "sched_arrivals"} <= set(features)
+    assert {"icao", "h", "wspd_obs", "crosswind_obs", "sched_arr_count"} <= set(features)
 
 
 def test_preprocessor_roundtrip_and_unseen_airport(panel, tmp_path):
@@ -167,3 +168,25 @@ def test_end_to_end_train_and_predict(panel, tmp_path):
     scrambled = panel.assign(oracle_arr_hint=0, capacity_ratio=0, **{cfg.TARGET: 0})
     out2 = predict_aar(scrambled, icao="KDFW", h=[3, 12], start="2025-01-01", model_dir=tmp_path / "aar_model")
     np.testing.assert_allclose(out.aar_pred, out2.aar_pred)
+
+
+def test_schedule_context_reads_neighbouring_schedule_only(panel):
+    ctx = add_schedule_context(panel, panel)
+    katl = ctx[(ctx.icao == "KATL") & (ctx.h == 3)].sort_values(cfg.TIME).reset_index(drop=True)
+    assert katl.loc[10, "p2_sched_p1"] == katl.loc[11, "sched_arr_count"]
+    assert katl.loc[10, "p2_sched_m2"] == katl.loc[8, "sched_arr_count"]
+    assert np.isnan(katl.loc[0, "p2_sched_m1"])
+    # Built from the schedule, never from realised arrivals.
+    pd.testing.assert_frame_equal(ctx, add_schedule_context(panel.assign(**{cfg.TARGET: -1}), panel).assign(**{cfg.TARGET: ctx[cfg.TARGET]}))
+
+
+def test_origin_weather_drops_observations_after_cutoff():
+    t = pd.Timestamp("2024-03-01 12:00", tz="UTC")
+    flights = pd.DataFrame({
+        "dest_icao": "KATL", "sched_arr_utc": t + pd.Timedelta(minutes=50), "h": 3,
+        "origin_feature_obs_time": [t - pd.Timedelta(hours=3), t - pd.Timedelta(hours=2)],
+        "origin_prcp_mm": [0.0, 9.0], "origin_prcp_sum_3h_mm": 0.0, "origin_wspd_kt": 5.0,
+        "origin_wspd_max_3h_kt": 5.0, "origin_coco": 2.0,
+    })
+    out = origin_weather(flights, ["KATL"])
+    assert out.loc[0, "p2_org_n_wx"] == 1 and out.loc[0, "p2_org_prcp_max"] == 0.0

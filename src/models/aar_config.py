@@ -49,7 +49,7 @@ PERSISTENCE_COLUMN: str | None = None
 
 SEED = 42
 LGBM_PARAMS = {
-    "objective": "regression",  # L2; "poisson" is a natural next try for count targets
+    "objective": "poisson",  # count target; beat L2 slightly on validation (see ablation_aar.py)
     "metric": ["rmse", "mae"],
     "learning_rate": 0.05,
     "num_leaves": 31,

@@ -10,6 +10,7 @@ import lightgbm as lgb
 import pandas as pd
 
 from . import aar_config as cfg
+from .aar_context import add_context
 from .aar_data import load_hourly, normalise
 from .aar_features import AARPreprocessor
 
@@ -44,8 +45,12 @@ def predict_aar(
     features: rows shaped like hourly_features.parquet. If None, the parquet is loaded.
     icao / h / start / end: optional filters; start and end are inclusive UTC times on target_hour_utc.
     Returns columns icao, target_hour_utc, h, aar_pred (arrivals/hour, >= 0), sorted by time.
+
+    Neighbouring-hour schedule features are built from all rows before filtering, so pass
+    `features` covering at least 2 hours either side of the hours you want; missing ones become NaN.
     """
     df = load_hourly(data_path) if features is None else normalise(features)
+    df = add_context(df, df, flights=None)
     if icao is not None:
         df = df[df["icao"].isin([icao] if isinstance(icao, str) else icao)]
     if h is not None:

@@ -15,6 +15,7 @@ import pandas as pd
 
 from . import aar_config as cfg
 from .aar_baselines import HistoricalAverage, persistence
+from .aar_context import add_context
 from .aar_data import check, load_airport_timezones, load_hourly, split_chronological, validate_hourly
 from .aar_features import AARPreprocessor
 from .aar_metrics import evaluate
@@ -55,7 +56,8 @@ def run(data_path: Path = cfg.HOURLY_FEATURES, out_dir: Path = cfg.PRED_DIR, ref
     report = validate_hourly(panel, timezones)
     check(report)
 
-    labelled = panel.dropna(subset=[cfg.TARGET])
+    # Neighbouring-hour schedule from the full grid. Origin weather is left out: no validation gain.
+    labelled = add_context(panel.dropna(subset=[cfg.TARGET]), panel, flights=None)
     splits = split_chronological(labelled)
     sizes = {k: int(len(v)) for k, v in splits.items()}
     print(f"rows per split: {sizes}")
