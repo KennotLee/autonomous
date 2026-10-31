@@ -1,6 +1,6 @@
 # Failure cases: 3 worst high-confidence misses (test 2025)
 
-False negatives with the lowest predicted risk (threshold 0.119); one row per event, ties broken by larger delay. Weather 'seen' = event-airport row available at feature_obs_time; 'oracle' = P1's oracle_* (flights-CSV weather; its join puts it ~4-6 h before the event, see notes.md). Never a feature.
+False negatives with the lowest predicted risk (per-airport thresholds, see threshold.md); one row per event, ties broken by larger delay. Weather 'seen' = event-airport row available at feature_obs_time; 'oracle' = P1's oracle_* (flights-CSV weather; its join puts it ~4-6 h before the event, see notes.md). Never a feature.
 
 ## 2025-03-17_OO4927_MAF_DFW_arr (h = 3)
 - scheduled 2025-03-17 07:19:00 local (2025-03-17 12:19:00+00:00 UTC), arr at KDFW, carrier OO; delay 187 min; predicted risk 0.033

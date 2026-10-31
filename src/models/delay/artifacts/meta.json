@@ -2,6 +2,20 @@
  "threshold": 0.11929191087666573,
  "val_precision": 0.21304818624796967,
  "val_recall": 0.4031762295081967,
+ "thresholds_by_airport": {
+  "KATL": {
+   "threshold": 0.09823325572958563,
+   "val_precision": 0.19466541881141788,
+   "val_recall": 0.45614035087719296,
+   "val_alert_rate": 0.19750462107208872
+  },
+  "KDFW": {
+   "threshold": 0.12342694754714906,
+   "val_precision": 0.2189239332096475,
+   "val_recall": 0.45384615384615384,
+   "val_alert_rate": 0.2259958071278826
+  }
+ },
  "features": [
   "event_type",
   "airport",

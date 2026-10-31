@@ -135,15 +135,24 @@ def main():
     tr, va = lab[lab.split == "train"], lab[lab.split == "val"]
     m = fit(tr, va, cols, cats)
     print(f"gbm: {len(cols)} features, {m.best_iteration_} trees")
-    thr, vp, vr = choose_threshold(va.label_45.to_numpy(), m.predict_proba(X(va, cols, cats))[:, 1])
-    print(f"threshold {thr:.3f} (max F1 on val: precision {vp:.3f}, recall {vr:.3f})")
+    pv = m.predict_proba(X(va, cols, cats))[:, 1]
+    thr, vp, vr = choose_threshold(va.label_45.to_numpy(), pv)
+    print(f"global threshold {thr:.3f} (max F1 on val: precision {vp:.3f}, recall {vr:.3f})")
+    # per-airport thresholds, also max F1 on validation only (base rates differ by airport)
+    by_ap = {}
+    for ap in sorted(va.airport.unique()):
+        k = (va.airport == ap).to_numpy()
+        t, p_, r_ = choose_threshold(va.label_45.to_numpy()[k], pv[k])
+        by_ap[ap] = {"threshold": t, "val_precision": p_, "val_recall": r_, "val_alert_rate": float((pv[k] >= t).mean())}
+        print(f"  {ap}: threshold {t:.3f} (val precision {p_:.3f}, recall {r_:.3f})")
 
     te = ev[ev.split == "test"].reset_index(drop=True)
     xt = X(te, cols, cats)
     risk = m.predict_proba(xt)[:, 1]
+    thr_row = te.airport.map({ap: d["threshold"] for ap, d in by_ap.items()}).fillna(thr).to_numpy()
     out = pd.DataFrame({"event_id": te.event_id, "airport": te.airport, "event_type": te.event_type,
                         "sched_time_utc": te.sched_time_utc, "h": te.h, "risk_prob": risk.round(4),
-                        "high_risk": (risk >= thr).astype(int), "top_drivers": top_drivers(m, xt)})
+                        "high_risk": (risk >= thr_row).astype(int), "top_drivers": top_drivers(m, xt)})
     # join coverage with P1's file must be exact, both ways
     p1_test = ev.loc[ev.split == "test", ["event_id", "h"]]
     j = p1_test.merge(out[["event_id", "h"]], how="outer", indicator=True)
@@ -153,7 +162,7 @@ def main():
 
     m.booster_.save_model(str(MODEL_DIR / "gbm.txt"))
     (MODEL_DIR / "meta.json").write_text(json.dumps(
-        {"threshold": thr, "val_precision": vp, "val_recall": vr, "features": cols,
+        {"threshold": thr, "val_precision": vp, "val_recall": vr, "thresholds_by_airport": by_ap, "features": cols,
          "best_iteration": m.best_iteration_, "train_end": str(TRAIN_END), "val_end": str(VAL_END)}, indent=1))
 
 

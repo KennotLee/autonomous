@@ -83,22 +83,32 @@ def main():
     te["p_base_rate"] = tr.label_45.mean()
     rf1, rc, rt = rule_fit(tr)
     te["p_rule"] = rule_score(te, rc, rt)
-    thresholds = {"gbm": thr, "rule": 0.5, "base_rate": None}
+    by_ap = {ap: d["threshold"] for ap, d in meta["thresholds_by_airport"].items()}
+    te["thr_gbm"] = te.airport.map(by_ap).fillna(thr)          # per-airport (used for high_risk)
+    te["p_gbm_global_thr"], te["thr_gbm_global_thr"] = te.p_gbm, thr  # old single threshold, for comparison
+    te["thr_rule"] = 0.5
+    models = ["gbm", "gbm_global_thr", "rule", "base_rate"]
 
     # ---- metrics.csv: overall and per h / airport / event_type
     rows = []
     slices = [("all", "all", te)] + [(k, v, g) for k in ("h", "airport", "event_type") for v, g in te.groupby(k)]
     for kind, val, g in slices:
-        for name, t in thresholds.items():
+        for name in models:
+            t = g[f"thr_{name}"].to_numpy() if f"thr_{name}" in g else None
             rows.append({"slice": kind, "value": val, "model": name} | scores(g.label_45.to_numpy(), g[f"p_{name}"].to_numpy(), t))
     met = pd.DataFrame(rows)
     met.to_csv(MET_DIR / "metrics.csv", index=False, float_format="%.4f")
 
     # ---- threshold.md
     (MET_DIR / "threshold.md").write_text(
-        f"# Decision threshold: {thr:.3f}\n\n"
-        f"Max F1 on the validation slice (2024-07..12, never test): a missed severe delay and a false alert "
-        f"weigh the same. Validation precision {meta['val_precision']:.3f}, recall {meta['val_recall']:.3f}.\n\n"
+        "# Decision thresholds (per airport)\n\n"
+        "Max F1 on each airport's validation slice (2024-07..12, never test): a missed severe delay and a false "
+        "alert weigh the same, judged within each airport.\n\n"
+        "| airport | threshold | val precision | val recall | val alert rate |\n|---|---|---|---|---|\n"
+        + "".join(f"| {ap} | {d['threshold']:.3f} | {d['val_precision']:.3f} | {d['val_recall']:.3f} | "
+                  f"{d['val_alert_rate']:.3f} |\n" for ap, d in meta["thresholds_by_airport"].items())
+        + f"\nPrevious single threshold (`gbm_global_thr` in metrics.csv): {thr:.3f} (val precision "
+        f"{meta['val_precision']:.3f}, recall {meta['val_recall']:.3f}). Airports not in the table fall back to it.\n\n"
         f"Weather rule baseline: ts_flag OR crosswind >= {rc:.1f} km/h OR tailwind >= {rt:.1f} km/h "
         f"(cut-offs = max F1 on train 2023-01..2024-06, F1 {rf1:.3f}).\n")
 
@@ -150,7 +160,7 @@ def main():
     wx = ["temp", "prcp", "wspd", "pres", "coco", "crosswind", "tailwind", "ts_flag"]
     owx = ["oracle_temp", "oracle_prcp", "oracle_wspd", "oracle_pres", "oracle_coco"]
     lines = ["# Failure cases: 3 worst high-confidence misses (test 2025)\n",
-             f"False negatives with the lowest predicted risk (threshold {thr:.3f}); one row per event, "
+             f"False negatives with the lowest predicted risk (per-airport thresholds, see threshold.md); one row per event, "
              "ties broken by larger delay. Weather 'seen' = event-airport row available at feature_obs_time; "
              "'oracle' = P1's oracle_* (flights-CSV weather; its join puts it ~4-6 h before the event, see "
              "notes.md). Never a feature.\n"]
