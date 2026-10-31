@@ -11,7 +11,11 @@ Out of scope for P1: splits, models, baselines, metrics, dashboard.
 - `data/interim/schema_profile.csv` — per-column profile (dtype, % missing, min/max, examples). Not committed.
 - `config/airports.yaml` — per-ICAO runway heading, timezone, meteostat lookup. `src/data/` — P1 pipeline code.
 - `scripts/` — profiling scripts + `run_pipeline.py` entry. Env: `.venv/bin/python`; `pip install -r requirements.txt`.
-- Repo: https://github.com/KennotLee/autonomous (main). Team workflow rules in README.md.
+- `src/data/fetch_weather.py` — standalone METAR/ASOS downloader (IEM archive) for any ICAO + date range;
+  not used by the pipeline. `.venv/bin/python src/data/fetch_weather.py --icao KATL --start 2024-07-01 --end 2024-07-31`.
+  IEM gusts: ~15–18% of reports at KATL/KDFW (vs ~1–3% in Meteostat) → candidate gust source for a v2.
+  IEM routine METAR at HH:52 == Meteostat value stamped HH+1:00 (so Meteostat stamp ≥ true obs time).
+- Repo: https://github.com/KennotLee/autonomous (P1 work on branch `p1`). Team workflow rules in README.md.
 
 ## Verified facts about the raw data (full file, 2026-10-31)
 - 148,273 rows × 123 cols, BTS On-Time Performance + 14 Meteostat-style weather cols.
@@ -43,7 +47,7 @@ Out of scope for P1: splits, models, baselines, metrics, dashboard.
 import pandas as pd
 hr = pd.read_parquet("data/processed/hourly_features.parquet")   # 181,048 rows = 2 icao × 22,631 h × 4 horizons
 fl = pd.read_parquet("data/processed/flight_features.parquet")   # 101,196 rows = 25,299 flights × 4 horizons
-X = hr[hr.h == 6]   # pick ONE horizon per model; never train on oracle_* columns or target columns
+X = hr[hr.h == 6]   # filter to one h, or keep all h and use h as a feature; never train on oracle_* or target columns
 ```
 Rebuild: `.venv/bin/python scripts/run_pipeline.py --icao KATL KDFW --start 2023-01-01 --end 2025-07-31 [--weather-scope all]`
 then `.venv/bin/python tests/test_leakage.py` (must print ALL LEAKAGE CHECKS PASSED). All timestamps are tz-aware UTC.

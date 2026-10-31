@@ -104,7 +104,7 @@ def wind_components(speed_kt, wdir_deg, heading_deg):
     hw = np.where(calm, 0.0, hw)
     xw = np.where(calm, 0.0, xw)
     tw = np.where(np.isnan(hw), np.nan, np.maximum(0.0, -hw))
-    return hw, xw, tw
+    return hw + 0.0, xw + 0.0, tw + 0.0  # + 0.0 turns IEEE -0.0 into 0.0
 
 
 def build_weather_features(raw: pd.DataFrame | None, heading_deg: float, windows: list[int],
@@ -140,4 +140,6 @@ def build_weather_features(raw: pd.DataFrame | None, heading_deg: float, windows
         f["headwind_kt"], f["crosswind_kt"], f["tailwind_kt"] = wind_components(f.wspd_kt, f.wdir_deg, heading_deg)
         f["gust_headwind_kt"], f["gust_crosswind_kt"], f["gust_tailwind_kt"] = wind_components(
             f.wpgt_kt, f.wdir_deg, heading_deg)
+    num = f.select_dtypes("float").columns
+    f[num] = f[num] + 0.0  # normalise IEEE -0.0 (e.g. Meteostat dew point) to 0.0
     return f.reset_index()
