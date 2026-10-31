@@ -1,0 +1,22 @@
+# Per-airport config (P1 owns). Code in src/ must read airports from here; no hardcoded airports.
+# runway_heading_deg: organiser assumption (all ops on this heading). Used as given (not corrected for
+#   magnetic vs true north; wind direction from Meteostat is true north).
+# timezone: IANA tz, from Meteostat station metadata (Stations().fetch(), row where icao == key),
+#   checked 2026-10-31.
+# meteostat: always look the station up at runtime by ICAO via the meteostat package; do not
+#   hardcode station IDs here.
+# iata: code used in the BTS on-time data (ORIGIN / DEST columns).
+
+airports:
+  KATL:
+    iata: ATL
+    runway_heading_deg: 80
+    timezone: America/New_York
+    meteostat:
+      lookup: icao
+  KDFW:
+    iata: DFW
+    runway_heading_deg: 180
+    timezone: America/Chicago
+    meteostat:
+      lookup: icao
