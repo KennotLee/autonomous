@@ -44,11 +44,11 @@ def predict_aar(
     start: str | pd.Timestamp | None = None,
     end: str | pd.Timestamp | None = None,
     model_dir: Path | str = cfg.PRED_DIR / cfg.MODEL_SUBDIR,
-    data_path: Path | str = cfg.HOURLY_FEATURES,
+    data_path: Path | str = cfg.PANEL,
 ) -> pd.DataFrame:
     """Predicted arrivals per hour (AAR proxy) with p10/p90, for rows of the hourly feature panel.
 
-    features: rows shaped like hourly_features.parquet. If None, the parquet is loaded.
+    features: rows shaped like the P2 panel (aar_dataset.py). If None, the panel is loaded.
     icao / h / start / end: optional filters; start and end are inclusive UTC times on target_hour_utc.
     Returns icao, target_hour_utc, h, pred_arr_count, p10, p90 (arrivals/hour, >= 0), sorted by time.
 
@@ -58,7 +58,7 @@ def predict_aar(
     of the hours you want; missing ones become NaN.
     """
     df = load_hourly(data_path) if features is None else normalise(features)
-    df = add_context(df, df, flights=None)
+    df = add_context(df, df)
     if icao is not None:
         df = df[df["icao"].isin([icao] if isinstance(icao, str) else icao)]
     if h is not None:

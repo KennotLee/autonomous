@@ -9,7 +9,7 @@ import pandas as pd
 from . import aar_config as cfg
 
 # Derived from target_hour_utc in the airport's local time. The target hour is known when the
-# forecast is issued, so these carry no future information. Prefixed to avoid clashing with P1.
+# forecast is issued, so these carry no future information.
 CALENDAR = ["p2_local_hour", "p2_local_dow", "p2_local_month", "p2_is_weekend"]
 
 
@@ -39,7 +39,7 @@ def exclusion_reason(col: str) -> str | None:
     if col in cfg.NON_FEATURE_COLUMNS:
         return "timestamp/identifier"
     if col not in cfg.ALLOWED_OVERRIDES and any(t in col.lower() for t in cfg.SUSPICIOUS_TOKENS):
-        return "name suggests realised outcome; add to ALLOWED_OVERRIDES once P1 confirms it is past-only"
+        return "name suggests realised outcome; add to ALLOWED_OVERRIDES once confirmed known at t - h"
     return None
 
 
@@ -61,7 +61,7 @@ def select_feature_columns(df: pd.DataFrame) -> tuple[list[str], dict[str, str]]
     unknown = [c for c in features if provenance(c) is None]
     if unknown:
         raise ValueError(
-            f"inputs with no known availability at forecast time: {unknown}. Fail-closed: confirm with P1 "
+            f"inputs with no known availability at forecast time: {unknown}. Fail-closed: confirm "
             "that each is observed at or before t - h (or known in advance), then add it to "
             "aar_config.ALLOWED_OVERRIDES or the allowlists."
         )
@@ -72,18 +72,18 @@ def provenance(col: str) -> str | None:
     """Why an input is known at forecast time t - h, or None if that is not established."""
     if col in ("icao", "h"):
         return "identifier (airport, horizon)"
-    if col in cfg.CALENDAR_COLUMNS or col in CALENDAR:
+    if col in CALENDAR:
         return "calendar of the target hour (known in advance)"
-    if col == "sched_arr_count" or re.fullmatch(r"p2_sched_[mp]\d", col):
+    if col == "sched_arr_count" or re.fullmatch(r"p2_sched_[mp]\d", col) or re.fullmatch(r"p2_ops_sched_last\d+h", col):
         return "published schedule (known in advance)"
     if col in cfg.WEATHER_OBS_COLUMNS or re.fullmatch(cfg.WEATHER_OBS_PATTERN, col):
-        return "hub weather observed at feature_obs_time <= t - h"
+        return "hub weather observed at feature_obs_time = t - h"
     if col.startswith(("p2_hub_", "p2_sched_x_", "p2_sched_m1_x_")):
-        return "derived from hub weather observed <= t - h and the schedule"
-    if col.startswith("p2_org_"):
-        return "origin-airport weather observed <= t - h"
+        return "derived from hub weather observed at t - h and the schedule"
+    if re.fullmatch(r"p2_ops_arr_last\d+h", col):
+        return "realised arrivals that landed before t - h"
     if col in cfg.ALLOWED_OVERRIDES:
-        return "confirmed by P1 as observed <= t - h"
+        return "confirmed as known at t - h (ALLOWED_OVERRIDES)"
     return None
 
 

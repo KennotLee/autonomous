@@ -1,4 +1,4 @@
-"""Load, validate and chronologically split data/processed/hourly_features.parquet."""
+"""Load, validate and chronologically split the P2 hourly panel (built by aar_dataset.py)."""
 from pathlib import Path
 
 import numpy as np
@@ -12,10 +12,13 @@ class SchemaError(ValueError):
     """The processed file breaks the team contract; training must not proceed."""
 
 
-def load_airport_timezones(path: Path = cfg.AIRPORTS_YAML) -> dict[str, str]:
+def load_airports(path: Path = cfg.AIRPORTS_YAML) -> dict[str, dict]:
     with open(path, encoding="utf-8") as f:
-        airports = yaml.safe_load(f)["airports"]
-    return {icao: a["timezone"] for icao, a in airports.items()}
+        return yaml.safe_load(f)["airports"]
+
+
+def load_airport_timezones(path: Path = cfg.AIRPORTS_YAML) -> dict[str, str]:
+    return {icao: a["timezone"] for icao, a in load_airports(path).items()}
 
 
 def normalise(df: pd.DataFrame) -> pd.DataFrame:
@@ -31,12 +34,12 @@ def normalise(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def load_hourly(path: Path = cfg.HOURLY_FEATURES) -> pd.DataFrame:
+def load_hourly(path: Path = cfg.PANEL) -> pd.DataFrame:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(
-            f"{path} not found. It is produced by P1's pipeline (scripts/run_pipeline.py). "
-            "No model was trained and no metrics were written."
+            f"{path} not found. Build it with python -m src.models.aar_dataset "
+            "(needs the challenge-5 weather CSV and the BTS download). No model was trained."
         )
     return normalise(pd.read_parquet(path))
 
@@ -45,7 +48,7 @@ def validate_hourly(df: pd.DataFrame, timezones: dict[str, str]) -> dict:
     """Check keys, timestamps, horizons, missingness and target availability.
 
     Returns a JSON-serialisable report with "errors" (contract violations that would
-    corrupt training or leak) and "warnings" (usable but worth raising with P1).
+    corrupt training or leak) and "warnings" (usable but worth investigating).
     """
     errors, warnings = [], []
     report = {"n_rows": int(len(df)), "errors": errors, "warnings": warnings}
@@ -136,7 +139,7 @@ def check(report: dict) -> None:
     for w in report["warnings"]:
         print(f"WARNING: {w}")
     if report["errors"]:
-        raise SchemaError("hourly_features.parquet failed validation:\n  " + "\n  ".join(report["errors"]))
+        raise SchemaError("P2 hourly panel failed validation:\n  " + "\n  ".join(report["errors"]))
 
 
 def split_chronological(df: pd.DataFrame) -> dict[str, pd.DataFrame]:

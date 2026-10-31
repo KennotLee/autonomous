@@ -1,11 +1,5 @@
 P2 Models.
 
-Inputs (team contract, column names fixed; full details in CLAUDE.md):
-- data/processed/hourly_features.parquet: icao, target_hour_utc, h, feature_obs_time, [weather + wind component + rolling + calendar features], arr_count
-- data/processed/flight_features.parquet: flight_id, origin_icao, dest_icao, sched_time_utc, h, feature_obs_time, [origin_* and dest_* features], delay_min, label_45
-
-h ∈ {3,6,9,12}; all non-oracle features observed at or before target time − h. Columns prefixed `oracle_` are same-hour weather for oracle comparison only — never train production models on them.
-
 Outputs: outputs/predictions/aar_preds.csv (`icao, target_hour_utc, h, pred_arr_count, p10, p90`, CLAUDE.md "B. Prediction CSVs" + P10/P90) and outputs/predictions/delay_preds.csv (P3).
 
 ---
@@ -15,21 +9,43 @@ Outputs: outputs/predictions/aar_preds.csv (`icao, target_hour_utc, h, pred_arr_
 Forecasts how many planes will land at KATL and KDFW in each UTC hour, 3, 6, 9 and 12 hours ahead,
 with a p10–p90 uncertainty band for the dashboard.
 
-> **The target is a proxy.** `arr_count` = realised arrivals (landed, not cancelled or diverted) per UTC
-> hour, from a ~0.5% BTS sample (about 5 arrivals per airport per day, 0 in 82% of hours). It stands in
-> for the arrival acceptance rate (AAR); it is **not** runway capacity. Compare models on it; do not read
-> the absolute numbers as capacity.
+> **The target is a proxy.** `arr_count` = realised arrivals (wheels-on, not cancelled or diverted)
+> per UTC hour, from the **full** BTS on-time data: about 900 arrivals per airport per day, mean
+> 35/hour, peak 103/hour. It stands in for the arrival acceptance rate (AAR) and is **not** a
+> declared runway capacity: an hour with low demand has few arrivals even if capacity was high.
+
+## Data (challenge 5)
+
+| source | what | used for |
+|---|---|---|
+| `challenge5_hourly_weather_ATL_DFW.csv` | Meteostat hourly (NOAA ISD), stations 72219 ATL / 72259 DFW, 2023-01-01..2025-07-31, UTC + local hour, runway head/cross/tailwind (ATL 80°, DFW 180°) | all weather inputs |
+| `challenge5_data_guide.xlsx` | column meanings and rules | leakage rule, units, codes |
+| BTS Reporting Carrier On-Time Performance, 2023-01..2025-07 | every flight landing at ATL/DFW (1,644,216 flights) | target and schedule |
+
+The data guide makes hourly AAR optional because the challenge's flight sample is too sparse
+(~6 ATL arrivals a day) and says teams who want AAR "may pull the full BTS on-time data
+automatically". `aar_bts.py` does exactly that. The challenge's flight sample is not used by P2.
+
+Data rules from the guide that P2 follows:
+- **No leakage:** weather is joined on airport + hour, then shifted by h ∈ {3, 6, 9, 12}: every weather
+  input for target hour t is the observation of hour t − h.
+- **Times:** BTS hhmm times are local; the weather file gives UTC and local hours. Everything is UTC.
+- **Generality:** airports come from `config/airports.yaml` (IATA, time zone); `aar_bts.py` works for any
+  airport there. The weather file covers ATL and DFW only, so that is what is trained and scored.
+- `wind_gust_kmh` is 100% missing in the weather file and is dropped.
+
+Raw files live in `data/raw/challenge5/` and caches in `data/interim/` (both gitignored).
 
 ## Brief checklist
 
 | P2 requirement | Where |
 |---|---|
 | Target = actual arrivals per airport per hour, labelled as an AAR proxy | above; `metadata.json → target`; `aar_metrics_table.md` header |
-| Baseline: persistence | last **completed** hour before t − h (the hour starting at t − h has not happened yet at forecast time) |
+| Baseline: persistence | arrivals in the last **completed** hour before t − h (the hour starting at t − h has not happened yet at forecast time) |
 | Baseline: hour-of-day × day-of-week mean | airport × local hour × local weekday, training years only |
-| Extra baseline (strongest): schedule × completion ratio | scheduled arrivals × (arrivals / scheduled) per airport, training years only |
+| Extra baseline: schedule × completion ratio | scheduled arrivals × (arrivals / scheduled) per airport, training years only |
 | LightGBM, one model with h as a feature | `train_aar.py`; `h` is an input |
-| Train on 2023–24, test on 2025 | final models fit on 2023-01-01..2024-12-31 only; 2025 scored once |
+| Train on 2023–24, test on 2025 | final models fit on 2023-01-02..2024-12-31 only; 2025 scored once |
 | RMSE by horizon × airport, model vs baselines | `aar_metrics_table.md` (readable), `aar_metrics.csv` (all slices) |
 | p10/p90 via quantile regression | two LightGBM quantile models (α = 0.1, 0.9) |
 | `aar_preds.csv (icao, target_time, h, pred, p10, p90)` | team schema names: `icao, target_hour_utc, h, pred_arr_count, p10, p90` |
@@ -40,30 +56,23 @@ with a p10–p90 uncertainty band for the dashboard.
 ```
 py -3.12 -m venv .venv
 .venv\Scripts\pip install -r requirements.txt -r src/models/requirements-aar.txt
-.venv\Scripts\python -m src.models.train_aar --validate-only   # schema + leakage checks only
-.venv\Scripts\python -m src.models.train_aar                   # train, evaluate, save
-.venv\Scripts\python -m pytest src/models/tests -q             # 18 tests (synthetic data)
+
+# 1. put challenge5_hourly_weather_ATL_DFW.csv (and the data guide) in data\raw\challenge5\
+# 2. download BTS arrivals for the airports in config/airports.yaml (~31 months, ~1 GB streamed,
+#    ~30 min; resumable, keeps only small filtered parquet files in data\interim\bts\)
+.venv\Scripts\python -m src.models.aar_bts --start 2023-01 --end 2025-07
+# 3. build the hourly panel -> data\interim\p2_hourly_panel.parquet
+.venv\Scripts\python -m src.models.aar_dataset
+# 4. validate, train, evaluate, save
+.venv\Scripts\python -m src.models.train_aar --validate-only
+.venv\Scripts\python -m src.models.train_aar
+# optional: which inputs help (validation only)
+.venv\Scripts\python -m src.models.ablation_aar
+# tests (synthetic data, no downloads needed)
+.venv\Scripts\python -m pytest src/models/tests -q
 ```
 
-Training refuses to run (no artifacts written) if `data/processed/hourly_features.parquet` is missing or
-fails validation.
-
-**Until P1's branch is merged into main**, the input lives on `origin/p1`. Copy it into the gitignored
-`data/interim/` (run the `git cat-file` lines in Git Bash; PowerShell's `>` corrupts binary files):
-
-```
-git fetch origin
-git cat-file blob origin/p1:data/processed/hourly_features.parquet > data/interim/hourly_features.parquet
-.venv\Scripts\python -m src.models.train_aar --data data\interim\hourly_features.parquet
-
-# optional: input ablation (needs P1's flight file too)
-git cat-file blob origin/p1:data/processed/flight_features.parquet > data/interim/flight_features.parquet
-.venv\Scripts\python -m src.models.ablation_aar --data data\interim\hourly_features.parquet --flights data\interim\flight_features.parquet
-```
-
-Re-run training whenever P1 pushes a new parquet. A new column that is not on the input allowlist stops
-training until someone confirms it is known at forecast time (P1 v1.1 added `diversions`, an outcome; it
-is excluded).
+Training refuses to run (no artifacts written) if the panel is missing or fails validation.
 
 ## Outputs (`outputs/predictions/`)
 
@@ -75,18 +84,18 @@ is excluded).
 | `aar_ablation.csv` | which inputs help (validation only) |
 | `aar_model/model.txt`, `model_p10.txt`, `model_p90.txt` | point and quantile LightGBM models |
 | `aar_model/preprocessor.json` | input list and order, **provenance of every input**, every excluded column with the reason |
-| `aar_model/metadata.json` | parameters, iteration counts, fit date range, split sizes, feature importance, baseline ratios, validation report |
+| `aar_model/metadata.json` | data sources, parameters, iteration counts, fit date range, split sizes, feature importance, baseline ratios, validation report |
 
-`eval_hub_weather_actual` (normal / bad / severe) is the weather that **actually occurred** in hour t,
-from `oracle_*`. It is for slicing evaluation and the failure-case analysis only; it is not known at
-forecast time and the model never sees it. The dashboard should not show it as forecast information.
+`eval_hub_weather_actual` (normal / bad / severe) is the weather that **actually occurred** in hour t.
+It is for slicing evaluation only; it is not known at forecast time and the model never sees it. The
+dashboard should not show it as forecast information.
 
 ### Dashboard API
 
 ```python
 from src.models.predict_aar import predict_aar
-predict_aar(icao="KATL", h=6, start="2025-03-01", end="2025-03-07")   # reads the parquet
-predict_aar(features_df)                                              # or pass rows yourself
+predict_aar(icao="KATL", h=6, start="2025-03-01", end="2025-03-07")   # reads the panel
+predict_aar(features_df)                                              # or pass panel rows yourself
 # -> DataFrame[icao, target_hour_utc, h, pred_arr_count, p10, p90], arrivals/hour, all >= 0
 ```
 
@@ -94,170 +103,127 @@ Models are loaded once and cached. Pass `features` covering at least 2 hours eit
 want (neighbouring-hour schedule inputs; missing ones become NaN). A missing model input column raises
 `KeyError`. Realised arrivals, outcome and `oracle_*` columns in `features` are ignored.
 
-Suggested "Low confidence" rule for P4: `p90 − p10 ≥ 1` (flags 23.6% of 2025 test rows, mostly hours with
-scheduled flights), or input weather missing, or severe weather observed (see the failure case).
+Suggested "Low confidence" rule for P4: `p90 − p10 ≥ 20` arrivals (17.5% of 2025 test rows), or input
+weather missing, or severe weather observed at the hub. Show the band as a **~70% band**, not 80% (see
+intervals).
 
 ## Results (2025 test, scored once)
 
-Model v3, P1 data v1.1. Rows: train 104,980 · val 35,328 · test 40,740. Point model: Poisson, 458
-iterations; p90: 404; p10: 1 (see intervals). 44 inputs.
+Rows: train 104,784 · val 35,328 · test 40,704 (4 horizons per hour). Point model: Poisson LightGBM,
+1,670 iterations; p10: 278; p90: 292. 39 inputs.
 
 | airport | LightGBM RMSE | schedule × ratio | hour × weekday mean | persistence | vs best baseline | LightGBM MAE |
 |---|---|---|---|---|---|---|
-| KATL | **0.371** | 0.431 | 0.503 | 0.732 | −14% | 0.212 |
-| KDFW | **0.342** | 0.419 | 0.426 | 0.620 | −18% | 0.179 |
+| KATL | **6.82** | 8.68 | 9.32 | 34.28 | −21% | 4.48 |
+| KDFW | **8.89** | 14.58 | 10.68 | 34.91 | −17% | 5.84 |
 
-Validation (2024 H2): KATL 0.349, KDFW 0.323. P4's independent evaluation (`origin/p4`,
-`outputs/metrics/test_set_summary.md`) reproduces these numbers and the schedule baseline, with 90%
-bootstrap CIs excluding zero at every horizon.
+Units: arrivals per hour (KATL averages 35/hour in 2025). Validation (2024 H2): KATL 6.73, KDFW 8.61.
 
-- **Beats every baseline at every airport and horizon** (`aar_metrics_table.md`). Quote the gain against
-  the schedule baseline (−14% KATL, −18% KDFW): it shows what the model adds beyond reading the schedule.
-- **Flat across horizons** (KATL 0.370–0.371, KDFW 0.342–0.343 for h = 3…12): the main inputs, the
-  schedule, are known in advance at every lead time.
-- **Unbiased overall:** mean forecast vs actual (h = 6) 0.248 vs 0.249 at KATL, 0.181 vs 0.179 at KDFW.
-- **Under-predicts rare busy hours:** average KATL forecast by actual 0/1/2/3/4 arrivals =
-  0.13/0.61/1.10/1.69/2.01.
+| h | KATL RMSE | vs best baseline | KDFW RMSE | vs best baseline |
+|---|---|---|---|---|
+| 3 | 6.70 | −22.8% | 8.68 | −18.7% |
+| 6 | 6.85 | −21.1% | 8.86 | −17.1% |
+| 9 | 6.89 | −20.7% | 8.96 | −16.1% |
+| 12 | 6.84 | −21.2% | 9.07 | −15.0% |
 
-**Feature importance (gain share):** `sched_arr_count` 58.9%, next hour's schedule `p2_sched_p1` 20.0%,
-previous hour's `p2_sched_m1` 4.8%, local hour 3.1%, UTC hour 2.0%, pressure 1.1%, `p2_sched_m2` 1.1%,
-dew point 1.0%, `p2_sched_x_hub_bad` 0.9%. All weather inputs together: 7.4%.
+- **Beats every baseline at every airport and horizon.** Accuracy declines gently with lead time,
+  mostly at KDFW, as the weather and recent-traffic inputs grow staler.
+- **Persistence is a poor baseline here** (RMSE ~34): arrivals follow a strong daily cycle, so "same as
+  the last completed hour before t − h" is from a different part of the day.
+- **Unbiased overall:** mean forecast vs actual (h = 6) 35.3 vs 35.0 at KATL, 35.1 vs 34.9 at KDFW.
+
+**Feature importance (gain share):** `sched_arr_count` 72.9%, local hour 16.1%, next hour's schedule
+4.2%, schedule t+2 1.9%, previous hour's schedule 1.7%. Weather inputs hold 1.5% of the gain, but the
+ablation shows removing them makes validation RMSE 3.8% worse: gain share understates their value
+because they matter in the minority of hours with weather.
 
 ### By actual weather at the hub (2025 test RMSE)
 
 | airport | weather in hour t | rows | LightGBM | schedule × ratio | hour × weekday mean | persistence |
 |---|---|---|---|---|---|---|
-| KATL | normal | 17,040 | **0.369** | 0.431 | 0.502 | 0.728 |
-| KATL | bad | 2,732 | **0.374** | 0.424 | 0.513 | 0.757 |
-| KATL | severe | 596 | **0.400** | 0.467 | 0.505 | 0.721 |
-| KDFW | normal | 17,604 | **0.339** | 0.413 | 0.430 | 0.627 |
-| KDFW | bad | 2,228 | **0.362** | 0.446 | 0.420 | 0.597 |
-| KDFW | severe | 540 | 0.380 | 0.492 | **0.312** | 0.469 |
+| KATL | normal | 17,152 | **5.90** | 7.78 | 8.25 | 34.66 |
+| KATL | bad | 2,892 | **9.90** | 11.74 | 12.45 | 32.41 |
+| KATL | severe | 308 | **14.81** | 17.83 | 22.10 | 29.41 |
+| KDFW | normal | 17,728 | **8.05** | 13.91 | 9.86 | 35.24 |
+| KDFW | bad | 2,204 | **12.12** | 16.83 | 13.56 | 33.41 |
+| KDFW | severe | 420 | **17.97** | 25.36 | 21.36 | 27.93 |
 
-Bad = rain, ≥ 1 mm/h, wind ≥ 20 kt or crosswind ≥ 15 kt. Severe = thunderstorm/hail, snow/ice,
-≥ 4 mm/h or wind ≥ 25 kt. Rows count every horizon (4 per hour).
+Bad = rain (codes ≥ 7), ≥ 1 mm/h, wind ≥ 37 km/h or crosswind ≥ 28 km/h. Severe = thunderstorm/hail
+(≥ 23), freezing rain/sleet/snow, ≥ 4 mm/h or wind ≥ 46 km/h. Rows count every horizon.
 
-### Failure case: severe weather at KDFW
+The model beats all baselines in every weather class, but error rises 2–3× from normal to severe hours:
+storms cut realised arrivals in ways the inputs available 3–12 h ahead only partly anticipate.
 
-In severe-weather hours at KDFW, the plain hour × weekday mean (0.312) beats the model (0.380) by 18%.
-**Why:** the model leans on the schedule, but storms and ice at DFW cancel or delay scheduled flights, so
-realised arrivals fall below schedule; the model only partly lowers its forecast for weather (see below)
-because training holds only a few hundred such hours. The hour × weekday mean happens to be low in those
-hours. **How a user would notice:** severe weather observed at the hub at forecast time, together with a
-forecast close to the schedule. The dashboard can flag that combination ("severe weather observed;
-forecast may be too high"). P4's evaluation finds the same failure.
+### Failure case: severe weather
+
+Severe-weather hours have the largest errors (RMSE 14.8 KATL, 18.0 KDFW vs 5.9 / 8.1 in normal weather).
+**Why:** a thunderstorm that builds within the forecast horizon is not in the weather observed at
+t − h, and even a forecastable storm's effect (ground stops, holding, diversions) varies a lot from hour
+to hour; 2023–24 holds only about 240 severe-weather hours per airport (out of ~17,500). **How a user would notice:**
+a wide p10–p90 band, severe weather observed at the hub, or a forecast close to the schedule while
+storms are reported. The dashboard can flag these ("severe weather; forecast uncertain").
 
 ### Prediction intervals (p10–p90)
 
-Two LightGBM quantile models (α = 0.1 and 0.9), same inputs, early-stopped on validation (quantile
-loss) and refit on 2023–24. Bounds are widened if needed so p10 ≤ forecast ≤ p90, and clipped at 0.
+Two LightGBM quantile models (α = 0.1 and 0.9), same inputs, early-stopped on validation (quantile loss)
+and refit on 2023–24. Bounds are widened if needed so p10 ≤ forecast ≤ p90, and clipped at 0.
 
-| 2025 test | coverage (nominal 0.80) | below p10 (nominal ≤ 0.10) | above p90 (nominal ≤ 0.10) | mean width |
+| 2025 test | coverage (nominal 0.80) | below p10 (nominal 0.10) | above p90 (nominal 0.10) | mean width |
 |---|---|---|---|---|
-| KATL, all hours | 0.929 | 0.000 | 0.071 | 0.54 |
-| KDFW, all hours | 0.936 | 0.000 | 0.064 | 0.41 |
-| hours with ≥ 1 scheduled arrival | 0.876 | 0.000 | 0.124 | — |
-| hours with 1 scheduled | 0.874 | 0.000 | 0.126 | — |
-| hours with 3+ scheduled | 0.850 | 0.000 | 0.150 | — |
+| KATL | 0.733 | 0.137 | 0.131 | 11.9 |
+| KDFW | 0.686 | 0.159 | 0.154 | 15.1 |
 
-How to read this honestly:
-- **p10 is 0 everywhere, and that is almost always correct.** In 2023–24 the empirical 10th percentile of
-  arrivals is 0 whenever 0–2 flights are scheduled (99% of hours); the quantile model learns nothing
-  better (it stops after 1 iteration). Only in hours with 3+ scheduled flights (~1%) is the true p10 = 1,
-  so the lower bound is too low there (conservative).
-- **Coverage above 0.80 is mostly an artefact of whole-number, mostly-zero outcomes:** a band of
-  [0, 0.06] contains every zero hour. In hours that have scheduled flights, coverage is 0.876.
-- **p90 is slightly too narrow in busy hours:** 12–15% of actuals exceed p90 when flights are scheduled
-  (nominal 10%). Treat the upper bound as optimistic in busy hours.
-- Width 50%/90%/99% quantiles: 0.06 / 1.03 / 2.1 arrivals.
+**The band is too narrow:** it holds 69–73% of actuals instead of 80%, with misses on both sides
+roughly equally. Treat it as a ~70% band. A conformal adjustment on validation residuals would restore
+80% coverage; not done yet. Width median 12.9, 90th percentile 23.7 arrivals.
 
 ## Model
 
-- **One LightGBM point model** (Poisson objective, count target; `seed=42`, deterministic; defaults
-  otherwise, `aar_config.LGBM_PARAMS`) with `h` as an input, plus the two quantile models. Predictions
-  clipped at 0.
-- **Split** (by `target_hour_utc`, UTC, never shuffled): train 2023-01..2024-06, validation 2024-07..12,
-  test 2025-01..07. Iteration counts and every design choice are picked on validation; final models are
-  then refit on all of 2023–24; 2025 is scored once. `--no-refit` scores test with train-only fits.
-- **Inputs (44), each with a provenance recorded in `preprocessor.json`:**
+- **One LightGBM point model** (Poisson objective; `seed=42`, deterministic; defaults otherwise,
+  `aar_config.LGBM_PARAMS`) with `h` as an input, plus the two quantile models. Predictions clipped at 0.
+- **Split** (by `target_hour_utc`, UTC, never shuffled): train 2023-01-02..2024-06, validation
+  2024-07..12, test 2025-01..07. Iteration counts and every design choice are picked on validation;
+  final models are refit on all of 2023–24; 2025 is scored once. `--no-refit` scores test with
+  train-only fits.
+- **Inputs (39), each with a provenance recorded in `preprocessor.json`:**
 
 | group | inputs | why it is known at forecast time t − h |
 |---|---|---|
 | identifier (2) | `icao` (categorical), `h` | — |
-| calendar (8) | `hour_local`, `dow_local`, `month_local`, `hour_utc`, `p2_local_hour/dow/month`, `p2_is_weekend` | derived from the target hour itself |
-| schedule (5) | `sched_arr_count` (hour t), `p2_sched_m2/m1/p1/p2` (t−2..t+2) | published schedule, incl. flights later cancelled |
-| hub weather (23) | P1 weather block: temp, dew point, humidity, precipitation, wind, gust, pressure, condition code, rolling 3 h/6 h maxima/sums/changes, head/cross/tailwind | observed at `feature_obs_time` ≤ t − h |
-| weather × schedule (6) | `p2_hub_bad/severe/winter`, `p2_sched_x_hub_bad/severe`, `p2_sched_m1_x_hub_bad` | flags from the observed weather above × the schedule |
+| calendar (4) | `p2_local_hour`, `p2_local_dow`, `p2_local_month`, `p2_is_weekend` | derived from the target hour itself |
+| schedule (7) | `sched_arr_count` (hour t), `p2_sched_m2/m1/p1/p2` (t−2..t+2), `p2_ops_sched_last1h/3h` | published schedule, incl. flights later cancelled |
+| hub weather (18) | weather file columns (temperature, dew point, humidity, precipitation, wind direction/speed, pressure, condition code, head/cross/tailwind) + rolling: precipitation sum, wind max and crosswind max over 3 h and 6 h, pressure change over 3 h | observed at hour t − h (`feature_obs_time`), windows ending at t − h |
+| weather × schedule (6) | `p2_hub_bad/severe/winter`, `p2_sched_x_hub_bad/severe`, `p2_sched_m1_x_hub_bad` | flags from the t − h weather × the schedule |
+| recent arrivals (2) | `p2_ops_arr_last1h`, `p2_ops_arr_last3h` | flights that **landed** in the hours ending at t − h |
 
-  About 30% of scheduled flights land outside their scheduled hour, which is why the neighbouring-hour
-  schedule matters (it was the single biggest improvement).
+- **Baselines.** Persistence: arrivals in hour `[t − h − 1 h, t − h)`, the last hour fully over at
+  forecast time. Hour × weekday mean: airport × local hour × local weekday, each hour counted once across
+  horizons, training rows only. Schedule × ratio: `sched_arr_count` × training-period arrivals/scheduled
+  per airport (KATL 0.989, KDFW 0.979).
 
-- **Baselines.** Persistence: realised arrivals in hour `[t − h − 1 h, t − h)`, the last hour fully over
-  at forecast time. Hour × weekday mean: airport × local hour × local weekday, each hour counted once
-  across horizons, training rows only; unseen groups fall back to airport × hour, then airport. Schedule ×
-  ratio: `sched_arr_count` × training-period arrivals/scheduled per airport (KATL 0.990, KDFW 0.976).
+## Ablation (`aar_ablation.csv`, validation only)
 
-## Weather: what it does, and what the model can use
-
-**Weather strongly drives delays and cancellations** (P1 `flight_features.parquet`, completed flights,
-by the weather that actually occurred at the hub; Meteostat condition codes):
-
-| hub weather | flights into hubs | mean arr. delay | delayed > 45 min | cancelled | flights out of hubs | mean delay | delayed > 45 min | cancelled |
-|---|---|---|---|---|---|---|---|---|
-| 1–4 clear to overcast | 8,129 | 8.7 min | 9.4% | 1.1% | 14,000 | 8.5 min | 9.8% | 0.8% |
-| 5–6 fog | 188 | 5.1 | 8.6% | 0.5% | 366 | 6.4 | 10.0% | 0.8% |
-| 7–8 light rain / rain | 831 | 16.6 | 13.2% | 3.0% | 1,292 | 24.4 | 19.0% | 3.3% |
-| 9 heavy rain | 122 | 17.8 | 13.5% | 7.4% | 200 | 26.3 | 21.6% | 7.5% |
-| 10–16 freezing rain / sleet / snow | 22 | 92.5 | 37.5% | **63.6%** | 26 | 143.8 | 50.0% | **69.2%** |
-| 17–22 showers | 93 | 42.1 | 23.1% | 2.2% | 177 | 37.8 | 31.4% | 4.0% |
-| 23–27 lightning / hail / thunderstorm | 70 | 32.4 | 23.3% | 7.1% | 86 | 83.8 | 50.6% | 10.5% |
-
-Precipitation over 4 mm/h at the hub: mean arrival delay 58 min, 39% delayed > 45 min; wind over 20 kt:
-36 min, 21%. Weather is therefore a key input for P3's delay model.
-
-**It moves hourly arrival counts much less:** a delayed plane still lands, usually in the same or the
-next hour (captured by the neighbouring-hour schedule); severe weather touches ~1.6% of inbound flights;
-and a severe hour here has about one scheduled arrival. The effect is still real: in 2025 hours with
-scheduled arrivals, when severe weather was **observed at forecast time**, realised arrivals averaged
-0.624 vs 0.773 otherwise (−19%). The v3 model lowers its forecast in those hours from 0.802 to 0.736
-(v2 only to 0.767): the right direction, but only part of the way.
-
-**Weather-exposure inputs (v3).** Rather than leave the model to discover the weather × traffic
-interaction from a few hundred storm hours, they state it: bad/severe/winter flags from the hub weather
-observed at t − h, scheduled arrivals in t exposed to them, and flights due in t − 1 (which bad weather
-may delay into t).
-
-### Ablation (`aar_ablation.csv`, validation only)
-
-Each variant trained on train, scored on 2024 H2. Bad-weather hours 3,436; severe 364 (actual weather,
-for scoring only).
+Each variant trained on train, scored on 2024 H2 validation (35,328 rows; 3,380 bad-weather, 412 severe,
+by the actual weather, for scoring only).
 
 | variant | val RMSE | bad-weather hours | severe hours |
 |---|---|---|---|
-| hour × weekday mean baseline | 0.4616 | 0.4499 | 0.4834 |
-| A v1 (hub weather + schedule t, L2) | 0.3570 | 0.3692 | 0.4124 |
-| B A without any weather | 0.3569 | 0.3673 | 0.3965 |
-| C A + schedule t−2..t+2 | 0.3374 | 0.3607 | 0.4012 |
-| D C without weather | 0.3366 | 0.3601 | 0.3922 |
-| D2 C with Poisson (v2) | 0.3364 | 0.3599 | 0.4069 |
-| E C + origin-airport weather maxima | 0.3373 | 0.3604 | 0.4091 |
-| F E with Poisson | 0.3362 | 0.3611 | 0.4074 |
-| G C with **perfect** same-hour hub weather (`oracle_*`, diagnostic only) | 0.3367 | 0.3586 | 0.4000 |
-| **H D2 + weather exposure (v3, production)** | 0.3365 | **0.3580** | 0.3992 |
-| I H + origin-airport weather exposure | **0.3361** | 0.3594 | 0.4031 |
-| J I without raw hub weather | 0.3362 | 0.3633 | 0.3991 |
+| baseline: schedule × ratio | 11.85 | 14.76 | 17.99 |
+| baseline: hour × weekday mean | 10.65 | 12.43 | 15.79 |
+| A schedule + calendar only | 8.17 | 12.67 | 16.90 |
+| B A + hub weather at t − h | **7.73** | 12.01 | 16.03 |
+| C B + weather exposure | 7.81 | 12.02 | 15.90 |
+| **D C + recent arrivals (all inputs, production)** | 7.73 | **11.85** | **15.70** |
+| E D without any weather | 8.03 | 12.29 | 16.69 |
+| F D with L2 objective | 7.73 | 12.02 | 16.20 |
+| G D with the weather of hour t itself (`oracle_*`, diagnostic only) | 7.73 | 11.63 | 15.80 |
 
-- The big gain is the neighbouring-hour schedule (A → C, −5.5%).
-- Raw hub weather alone hurt severe hours (D2 vs D): too few storm hours, so the model fit noise. The
-  exposure inputs recover most of that (H) and give the best bad-weather score, slightly better even than
-  perfect same-hour weather (G).
-- Origin-airport weather (I): marginally best overall, worse in bad weather than H, and would make
-  `predict_aar()` need a second file, so not in production. Code kept in `aar_context.py`.
-- Tried and not adopted: monotone constraints forcing exposure inputs to only lower the forecast (val
-  0.3360 overall but 0.3601 bad / 0.4012 severe; only 59 validation hours had severe weather observed
-  at forecast time).
-- On 2025, v3's severe-weather gain over v2 shrank to ~0.5% (validation ~2%): small and directionally
-  right, not large.
+- **Weather helps:** adding the t − h weather cuts validation RMSE 5.5% (A → B), and removing it from the
+  full model costs 3.8% overall, 3.8% in bad weather and 6.2% in severe weather (D vs E).
+- **D is production:** best in bad and severe weather among the deployable variants, tied best overall.
+- Perfect knowledge of the target hour's weather (G) adds little beyond D overall, a bit in bad weather:
+  the t − h observation already carries most of the usable weather signal.
+- Poisson beats L2 in bad and severe weather (D vs F).
 
 ## No future data
 
@@ -266,82 +232,75 @@ is used for fitting or tuning.
 
 - **Fail-closed input allowlist.** Every input must belong to a known-at-forecast-time group (table in
   [Model](#model)); its reason is saved in `preprocessor.json → provenance`. Any other column stops
-  training with an error, so a new P1 column cannot slip in unreviewed.
-- **Never inputs:** `arr_count`, `capacity_ratio`, `mean_arr_delay`, `share_delayed_45`, `cancellations`,
-  `diversions`, any `oracle_*` or `arr_count*` column, and any column named like an outcome (`delay`,
-  `cancel`, `divert`, `divers`, `capacity`). Each exclusion and its reason are saved in `preprocessor.json`.
-- **Weather:** validation fails if any row has `feature_obs_time > target_hour_utc − h`. Exposure flags
-  use the observed weather only; a test checks they ignore `oracle_*`.
-- **Schedule** inputs (t−2..t+2) use only `sched_arr_count`, the published schedule; a test checks they
-  do not change when realised arrivals are scrambled.
+  training with an error.
+- **Never inputs:** `arr_count`, `cancellations`, `diversions`, `capacity_ratio`, `mean_arr_delay`,
+  `share_delayed_45`, any `oracle_*` or `arr_count*` column, and any column named like an outcome
+  (`delay`, `cancel`, `divert`, `divers`, `capacity`). Each exclusion and its reason are saved.
+- **Weather:** taken at hour t − h exactly, rolling windows end at t − h; validation fails if any row has
+  `feature_obs_time > target_hour_utc − h`. A test checks the shift for every h and that `oracle_*` is
+  the target hour.
+- **Recent arrivals** count only hours that ended by t − h (by landing time, not scheduled time); a test
+  checks no later hour is counted.
+- **Schedule** inputs use only `sched_arr_count`, the published schedule; a test checks they do not
+  change when realised arrivals are scrambled.
 - **Baselines:** persistence uses only the last hour fully over at t − h (asserted in code); the
   hour × weekday mean and the schedule ratio are fit on training years only.
 - **Time:** chronological split; the final models are fit on rows before 2025-01-01 (asserted in code,
-  and a test spies on every LightGBM training set). Validation picks iteration counts and design choices;
-  2025 is scored once at the end.
+  and a test spies on every LightGBM training set). 2025 is scored once at the end.
 - **End-to-end test:** setting the target, every outcome column and every `oracle_*` column to garbage
   leaves the forecast and the p10/p90 band unchanged.
-- `eval_hub_weather_actual` in `aar_preds.csv` is the only future-derived column; it is evaluation-only.
 
 ## How to read the outputs
 
-**`aar_preds.csv`.** One row per airport × UTC hour × horizon. `pred_arr_count` is the **expected**
-number of arrivals, not a whole number: 0.63 means "a plane is likely". `p10`/`p90` are the band.
-Example (KATL, h = 6, 2025):
+**`aar_preds.csv`.** One row per airport × UTC hour × horizon. `pred_arr_count` is the expected number
+of arrivals in that hour; `p10`/`p90` the band. Example (KATL, h = 6, 13 Jan 2025):
 
 ```
-target_hour_utc   actual  pred_arr_count  p10   p90   pred_persistence  pred_hist_avg
-2025-01-05 04:00     1        0.63         0.0   1.00  0.0               0.13     model expected a plane; one came
-2025-01-05 05:00     0        0.21         0.0   0.98  0.0               0.10     some chance of a late arrival spilling over
-2025-01-05 08:00     0        0.00         0.0   0.00  1.0               0.00     persistence carried over a stale arrival
+target_hour_utc   actual  pred_arr_count  p10    p90    pred_schedule  pred_hist_avg
+2025-01-13 12:00    50        50.4        41.8   59.7      29.7           68.9
+2025-01-13 13:00    67        67.1        58.5   81.9      82.1           80.4
+2025-01-13 14:00    58        51.7        45.7   56.8      54.4           55.1   (actual above p90)
 ```
 
-**`aar_metrics.csv` / `aar_metrics_table.md`.** MAE = average miss in arrivals per hour (0.21 ≈ off by a
-fifth of a plane). RMSE = same idea, big misses weigh more; the main score. Lower is better. `n` = rows
-scored; `ALL` = aggregated. Interval columns are filled for LightGBM only.
-
-**`aar_model/`.** `preprocessor.json → provenance` says why each input is available at forecast time;
-`dropped` lists every excluded column and why. `metadata.json → feature_importance_gain` shows what drives
-forecasts. The `.txt` files are the models, loaded by `predict_aar()`.
+**`aar_metrics.csv` / `aar_metrics_table.md`.** MAE = average miss in arrivals per hour (4.5 at KATL).
+RMSE = same idea, big misses weigh more; the main score. Lower is better. `n` = rows scored; `ALL` =
+aggregated. Interval columns are filled for LightGBM only.
 
 ## Files
 
 | file | role |
 |---|---|
-| `aar_config.py` | paths, horizons, split dates, input allowlist and denylist, LightGBM and quantile settings, output schema |
+| `aar_config.py` | data sources and paths, horizons, split dates, input allowlist and denylist, LightGBM and quantile settings, output schema |
+| `aar_bts.py` | download full BTS on-time data for configured airports; local → UTC arrival and landing times; hourly arrivals |
+| `aar_dataset.py` | build the panel: weather joined on airport + hour and shifted by h, rolling windows, recent arrivals, oracle weather for evaluation |
 | `aar_data.py` | load, validate (keys, timestamps, horizons, `feature_obs_time ≤ t − h`, missingness), chronological split |
 | `aar_features.py` | input selection, provenance (fail-closed), local calendar features, preprocessor |
-| `aar_context.py` | neighbouring-hour schedule and weather exposure (used); origin-airport weather (tested, not used) |
+| `aar_context.py` | neighbouring-hour schedule and weather-exposure inputs |
 | `aar_baselines.py` | persistence, hour × weekday mean, schedule × ratio |
 | `aar_metrics.py` | RMSE / MAE and interval scores by airport, horizon, weather |
 | `train_aar.py` | CLI: train, evaluate, save |
 | `ablation_aar.py` | input ablation on validation → `aar_ablation.csv` |
 | `predict_aar.py` | `predict_aar()` for the dashboard |
-| `tests/test_aar.py` | 18 tests, synthetic data: validation, exclusions, provenance, baselines, intervals, no-future-data |
+| `tests/test_aar.py` | 19 tests, synthetic data: BTS time conversion, weather shift, recent-arrival window, validation, exclusions, provenance, baselines, intervals, no-future-data |
 | `requirements-aar.txt` | `lightgbm`, `pytest` (P1 owns the shared `requirements.txt`) |
 
-## Assumptions and dependencies
+## Assumptions
 
-- Schema: P1's "Output schemas (v1.1)" in CLAUDE.md (branch `p1`). `target_hour_utc` labels the hour
-  starting at that time; timestamps are UTC.
-- `feature_obs_time` is P1's weather stamp (≤ t − h, up to 2 h older); the persistence baseline uses
-  t − h itself.
-- Rows with null `arr_count` would be dropped, never imputed (v1.1 has none). P1's grid covers every
-  hour including zero-arrival hours (22,631/22,631 per airport), which the persistence baseline relies on.
-- The brief names the columns `target_time` and `pred`; we use the team-contract names `target_hour_utc`
-  and `pred_arr_count` (CLAUDE.md, P4's request).
-- `lightgbm` and `pytest` need adding to `requirements.txt` (P1).
+- `target_hour_utc` labels the hour starting at that time. A flight counts in the hour its wheels touch
+  down; `sched_arr_count` counts every scheduled arrival, including flights later cancelled.
+- The repeated hour when clocks go back is read as standard time (one hour a year); the skipped spring
+  hour is shifted forward.
+- The panel starts 2023-01-02 local (so red-eyes that departed before 2023 are not missing) and ends at
+  the last weather hour, 2025-07-31 23:00 UTC.
+- A weather observation missing at exactly t − h stays missing (NaN, ~0.01–0.15% of rows); it is not
+  filled from a neighbouring hour.
 
 ## Limitations
 
-- **Proxy target on a sparse sample:** ~5 arrivals per airport per day; scores are on that tiny scale and
-  say nothing about real runway capacity.
-- **Severe weather is the weak spot:** worst accuracy, over-prediction, and at KDFW the simple hour ×
-  weekday mean wins (failure case above). More severe-weather hours (full BTS volume, more years) are the
-  real fix.
-- **Intervals:** p10 is always 0 (correct for 99% of hours, too low for hours with 3+ scheduled flights);
-  p90 is slightly too narrow in busy hours (12–15% above vs 10% nominal).
-- Busy hours are under-predicted (actual 3–4 → forecast ~1.7–2.0).
-- Hyperparameters are LightGBM defaults; only the objective and inputs were chosen on validation, and
+- **Proxy target:** realised arrivals mix capacity with demand; a quiet hour is not a low-capacity hour.
+- **Severe weather is the weak spot** (2–3× normal error), though the model still beats every baseline.
+- **Intervals are too narrow** (69–73% coverage vs 80% nominal).
+- **Weather is ATL and DFW only:** the BTS pipeline works for any configured airport, but weather for
+  other airports would need another source.
+- Hyperparameters are LightGBM defaults; only inputs and objective were chosen on validation, and
   validation scores are slightly optimistic because validation also picks iteration counts.
-- Gusts are 97–99% missing.
