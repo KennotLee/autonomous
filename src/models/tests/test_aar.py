@@ -92,16 +92,30 @@ def _toy_sources(hours=48):
 
 
 def test_panel_weather_is_shifted_by_h_and_oracle_is_hour_t():
+    from src.models.aar_dataset import weather_availability_lag_hours
     wx, arrivals = _toy_sources()
+    lag = weather_availability_lag_hours()
+    assert lag == 1  # P1's config: a row stamped HH:00 is available at HH:00 + 1 h
     p = build_panel(wx, arrivals).set_index([cfg.TIME, "h"])
     t = pd.Timestamp("2024-01-01 20:00", tz="UTC")  # hour index 20
     for h in cfg.HORIZONS:
         row = p.loc[(t, h)]
-        assert row["temp_c"] == 20 - h                      # observed at t - h
+        assert row["temp_c"] == 20 - h - lag                 # row stamped t - h - lag, available by t - h
         assert row[cfg.OBS_TIME] == t - pd.Timedelta(hours=h)
         assert row["oracle_temp_c"] == 20                    # target hour itself (evaluation only)
     validate_hourly_ok = validate_hourly(p.reset_index(), TZ)
     assert validate_hourly_ok["errors"] == []
+
+
+def test_every_weather_stamp_is_available_by_forecast_time():
+    """No weather row is used unless its stamp + availability lag <= t - h, for every panel row."""
+    from src.models.aar_dataset import weather_availability_lag_hours
+    wx, arrivals = _toy_sources()
+    lag = pd.Timedelta(hours=weather_availability_lag_hours())
+    p = build_panel(wx, arrivals)
+    cutoff = p[cfg.TIME] - pd.to_timedelta(p["h"], unit="h")
+    assert (p["weather_stamp_utc"] + lag <= cutoff).all()
+    assert (p["weather_stamp_utc"] <= cutoff - lag).all()
 
 
 def test_recent_arrivals_count_only_hours_ended_before_issue():

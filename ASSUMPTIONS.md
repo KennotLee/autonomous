@@ -74,7 +74,9 @@ CLAUDE.md lines 3–9) or *ours* (team decision). "Impact if wrong" is our estim
 18. **P2 arrivals model (optional AAR) uses full BTS data for its target**: realised arrivals per UTC hour by wheels-on time.
     - Where: `src/models/aar_bts.py:29-33` (download), `src/models/aar_dataset.py` (panel); SOURCES.md #2.
     - Given by: organiser allows it ("may pull the full BTS on-time data automatically"); the choice is ours (P2).
-    - Note: P2 joins weather on the stamp `time_utc = t − h` (the data guide's literal recipe), while P1/P3 treat a row as available at `time_utc + 1 h`. P2's features can therefore come from a METAR up to ~52 min after t − h. Compliant with the guide's recipe, but less strict than P1/P3.
+    - Weather timing: same rule as P1/P3. P2 joins the row stamped `t − h − 1 h` (lag from `config/airports.yaml`
+      `weather.availability_lag_hours`), so no weather feature is observed after t − h (`src/models/aar_dataset.py`
+      `build_panel`; test `test_every_weather_stamp_is_available_by_forecast_time`). Test RMSE KATL 6.86, KDFW 8.96.
 19. **P3 delay model split:** train before 2024-07-01, validation 2024-07..12, test 2025-01..07. One model for all horizons (`h` is a feature).
     - Where: `src/models/delay/train.py` (`split_of`, `TRAIN_END`, `VAL_END`).
     - Given by: ours.
@@ -91,3 +93,11 @@ CLAUDE.md lines 3–9) or *ours* (team decision). "Impact if wrong" is our estim
 23. **Year-to-year shift:** the positive rate is 10.1% in train, 9.6% in validation and 13.2% in test (2025); cancellations rise from 1.1% to 2.1%.
     - Given by: data (P1 check).
     - Impact: probabilities may under-predict in 2025 (see `outputs/metrics/calibration.png`).
+
+## 🧠 AI use
+
+24. **No LLM at runtime.** Risk scores come from LightGBM, recommendations from explicit rules, and per-flight reasons from LightGBM
+    feature contributions (`src/models/delay/train.py` `top_drivers`; dashboard rules in `app/app.py` `recommendations`).
+    - **Development:** code and docs were written with AI coding assistance (Claude Code), visible as `Co-Authored-By` lines
+      in the git history. Explanatory text (README, failure-case write-ups, dashboard notes) was AI-drafted and reviewed by the team.
+    - Given by: ours. Rubric: "Any LLM use is explanation-only and labelled."

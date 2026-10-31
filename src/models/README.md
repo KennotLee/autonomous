@@ -29,6 +29,9 @@ automatically". `aar_bts.py` does exactly that. The challenge's flight sample is
 Data rules from the guide that P2 follows:
 - **No leakage:** weather is joined on airport + hour, then shifted by h ∈ {3, 6, 9, 12}: every weather
   input for target hour t is the observation of hour t − h.
+- **Weather row available at time_utc + 1 h, per P1's finding** (a row stamped HH:00 can hold the HH:52
+  METAR; `config/airports.yaml` `weather.availability_lag_hours`): the row joined for target hour t is the one
+  stamped t − h − 1, so no weather input was observed after t − h.
 - **Times:** BTS hhmm times are local; the weather file gives UTC and local hours. Everything is UTC.
 - **Generality:** airports come from `config/airports.yaml` (IATA, time zone); `aar_bts.py` works for any
   airport there. The weather file covers ATL and DFW only, so that is what is trained and scored.
@@ -114,17 +117,19 @@ Rows: train 104,784 · val 35,328 · test 40,704 (4 horizons per hour). Point mo
 
 | airport | LightGBM RMSE | schedule × ratio | hour × weekday mean | persistence | vs best baseline | LightGBM MAE |
 |---|---|---|---|---|---|---|
-| KATL | **6.82** | 8.68 | 9.32 | 34.28 | −21% | 4.48 |
-| KDFW | **8.89** | 14.58 | 10.68 | 34.91 | −17% | 5.84 |
+| KATL | **6.86** | 8.68 | 9.32 | 34.28 | −21% | see `aar_metrics.csv` |
+| KDFW | **8.96** | 14.58 | 10.68 | 34.91 | −16% | see `aar_metrics.csv` |
 
-Units: arrivals per hour (KATL averages 35/hour in 2025). Validation (2024 H2): KATL 6.73, KDFW 8.61.
+Units: arrivals per hour (KATL averages 35/hour in 2025). Validation (2024 H2): KATL 6.80, KDFW 8.58.
+Before the weather-availability fix (row stamped t − h): KATL 6.82, KDFW 8.89. The weather, interval,
+importance and ablation tables below were produced before that fix; the shift moves scores by < 1%.
 
 | h | KATL RMSE | vs best baseline | KDFW RMSE | vs best baseline |
 |---|---|---|---|---|
-| 3 | 6.70 | −22.8% | 8.68 | −18.7% |
-| 6 | 6.85 | −21.1% | 8.86 | −17.1% |
-| 9 | 6.89 | −20.7% | 8.96 | −16.1% |
-| 12 | 6.84 | −21.2% | 9.07 | −15.0% |
+| 3 | 6.76 | −22.1% | 8.78 | −17.8% |
+| 6 | 6.92 | −20.3% | 8.93 | −16.4% |
+| 9 | 6.87 | −20.9% | 8.92 | −16.5% |
+| 12 | 6.91 | −20.4% | 9.20 | −13.9% |
 
 - **Beats every baseline at every airport and horizon.** Accuracy declines gently with lead time,
   mostly at KDFW, as the weather and recent-traffic inputs grow staler.
@@ -192,7 +197,7 @@ roughly equally. Treat it as a ~70% band. A conformal adjustment on validation r
 | identifier (2) | `icao` (categorical), `h` | — |
 | calendar (4) | `p2_local_hour`, `p2_local_dow`, `p2_local_month`, `p2_is_weekend` | derived from the target hour itself |
 | schedule (7) | `sched_arr_count` (hour t), `p2_sched_m2/m1/p1/p2` (t−2..t+2), `p2_ops_sched_last1h/3h` | published schedule, incl. flights later cancelled |
-| hub weather (18) | weather file columns (temperature, dew point, humidity, precipitation, wind direction/speed, pressure, condition code, head/cross/tailwind) + rolling: precipitation sum, wind max and crosswind max over 3 h and 6 h, pressure change over 3 h | observed at hour t − h (`feature_obs_time`), windows ending at t − h |
+| hub weather (18) | weather file columns (temperature, dew point, humidity, precipitation, wind direction/speed, pressure, condition code, head/cross/tailwind) + rolling: precipitation sum, wind max and crosswind max over 3 h and 6 h, pressure change over 3 h | row stamped t − h − 1 (available by t − h = `feature_obs_time`), windows ending at that stamp |
 | weather × schedule (6) | `p2_hub_bad/severe/winter`, `p2_sched_x_hub_bad/severe`, `p2_sched_m1_x_hub_bad` | flags from the t − h weather × the schedule |
 | recent arrivals (2) | `p2_ops_arr_last1h`, `p2_ops_arr_last3h` | flights that **landed** in the hours ending at t − h |
 
@@ -236,7 +241,7 @@ is used for fitting or tuning.
 - **Never inputs:** `arr_count`, `cancellations`, `diversions`, `capacity_ratio`, `mean_arr_delay`,
   `share_delayed_45`, any `oracle_*` or `arr_count*` column, and any column named like an outcome
   (`delay`, `cancel`, `divert`, `divers`, `capacity`). Each exclusion and its reason are saved.
-- **Weather:** taken at hour t − h exactly, rolling windows end at t − h; validation fails if any row has
+- **Weather:** the row stamped t − h − 1 (available at stamp + 1 h, so by t − h), rolling windows end at that stamp; validation fails if any row has
   `feature_obs_time > target_hour_utc − h`. A test checks the shift for every h and that `oracle_*` is
   the target hour.
 - **Recent arrivals** count only hours that ended by t − h (by landing time, not scheduled time); a test

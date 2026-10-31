@@ -13,6 +13,7 @@ import argparse
 from pathlib import Path
 
 import pandas as pd
+import yaml
 
 from . import aar_config as cfg
 from .aar_bts import arrival_times, hourly_arrivals, load_flights
@@ -54,9 +55,20 @@ def weather_features(wx: pd.DataFrame, grid: pd.DatetimeIndex) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
-def build_panel(wx: pd.DataFrame, arrivals: pd.DataFrame) -> pd.DataFrame:
-    """Join arrivals (target hour t) with weather at t - h, recent operations before t - h, and
-    oracle weather at t. arrivals: icao, target_hour_utc, arr_count, sched_arr_count, outcomes."""
+def weather_availability_lag_hours(path: Path = cfg.AIRPORTS_YAML) -> int:
+    """P1's config: a weather row stamped time_utc holds a METAR observed up to ~52 min later, so it
+    counts as available at time_utc + lag (config/airports.yaml weather.availability_lag_hours)."""
+    with open(path, encoding="utf-8") as f:
+        return int(yaml.safe_load(f).get("weather", {}).get("availability_lag_hours", 1))
+
+
+def build_panel(wx: pd.DataFrame, arrivals: pd.DataFrame, lag_hours: int | None = None) -> pd.DataFrame:
+    """Join arrivals (target hour t) with weather available by t - h, recent operations before t - h,
+    and oracle weather at t. arrivals: icao, target_hour_utc, arr_count, sched_arr_count, outcomes.
+
+    feature_obs_time = t - h is the availability time; the weather row joined is the one stamped
+    t - h - lag (weather_stamp_utc), whose observation is complete by t - h."""
+    lag = weather_availability_lag_hours() if lag_hours is None else lag_hours
     grid = pd.DatetimeIndex(sorted(arrivals[cfg.TIME].unique()))
     feats = weather_features(wx, grid)
     base = set(cfg.WEATHER_COLUMNS)
@@ -69,7 +81,8 @@ def build_panel(wx: pd.DataFrame, arrivals: pd.DataFrame) -> pd.DataFrame:
         p = arrivals.copy()
         p["h"] = h
         p[cfg.OBS_TIME] = p[cfg.TIME] - pd.Timedelta(hours=h)
-        p = p.merge(feats, left_on=["icao", cfg.OBS_TIME], right_on=["icao", "obs_hour"], how="left").drop(columns="obs_hour")
+        p["weather_stamp_utc"] = p[cfg.OBS_TIME] - pd.Timedelta(hours=lag)
+        p = p.merge(feats, left_on=["icao", "weather_stamp_utc"], right_on=["icao", "obs_hour"], how="left").drop(columns="obs_hour")
         for w in OPS_WINDOWS_H:  # hours [t-h-w, t-h): all ended by the forecast time
             landed = sum(
                 hourly[cfg.TARGET].reindex(pd.MultiIndex.from_arrays([p["icao"], p[cfg.OBS_TIME] - pd.Timedelta(hours=k)])).to_numpy()
