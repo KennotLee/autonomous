@@ -4,16 +4,17 @@
 .venv/bin/streamlit run app/app.py          # Windows: .venv\Scripts\streamlit run app/app.py  → http://localhost:8501
 ```
 
-**User:** the airline duty manager at the ATL/DFW hub. The model ranks flights; the human decides and logs the decision.
+**Users:** the ATC traffic management coordinator at ATL/DFW (default view) and the airline duty manager (second view). The model ranks flights; explicit rules make recommendations; the human decides and logs it. No LLM.
 
-| tab | what it shows | judging criterion |
+| tab | what it shows | rubric criterion / brief item |
 |---|---|---|
-| 🛫 Risk board | Flights for the chosen hub, day and horizon h. Each row shows: risk P(delay > 45 min); alert vs the per-airport threshold (tuned on 2024-H2 validation); how often flights scored like this were late in 2025; the weather-rule (B3) risk alongside; the model's top drivers; the exact weather observation used, with UTC and local timestamp; a decision and note. "Log my decisions" appends to `app/decision_log.csv`. Replay mode reveals outcomes. | problem realism, trust & traceability, human decides |
-| 📈 How good is it? | PR-AUC of B0–B3 vs the model for this h; significance from the day-block CI; table by airport, direction and adverse weather; calibration plot | honest evaluation |
-| ⚠️ Failure cases | Missed storm DFW 2025-04-23 and false alarm DFW 2025-05-30, with one-click jumps. In replay mode, today's missed flights | honest evaluation |
-| 🔒 Data & leakage | Live check that every weather obs is ≤ t − h; the no-leakage rules; sources and Meteostat credit | technical soundness, trust |
-| 🛬 Arrivals/hour | P2's optional AAR-proxy forecast with P10–P90 band and the schedule baseline | impact (bonus) |
-| 📝 Decision log | Every logged decision, with user, time, risk, threshold, weather obs time and model version | trust & traceability |
+| 🛫 Risk board & recommendations | **Recommendations:** 3-hour windows flagged by explicit rules (mean risk ≥ 1.5× the 2023–24 rate, or ≥ 2 alerts). Each shows the rule that fired, the weather context and a role-specific action. **Flights table**, one row per flight: risk; alert; "flights scored like this were late X% (90% CI)"; weather-rule risk; cautions (rare condition, model/rule disagreement, ⛔ no forecast when no weather ≤ t − h); drivers; the weather obs used with its timestamp and head/cross/tailwind; decision and note, logged with name and role. **Replay mode** reveals outcomes | brief: risk scores + recommendations; trust & traceability; human decides |
+| 📊 Historical trends | Monthly late *rates* for both hubs with the train/test line; late rate by hour (adverse vs normal at t − 3h); late rate by weather trigger; 2025 weekly predicted vs actual | brief: historical trends; un-normalised delays avoided |
+| 📈 How good is it? | PR-AUC of B0–B3 vs the model, with a significance verdict; precision and recall at the alert threshold vs the rule on the same alert budget; all slices; calibration; cross-airport transfer; impact box separating measured from reasoned | honest evaluation, impact |
+| ⚠️ Failure cases | Missed storm and false alarm with one-click jumps: why each fails, the fix, and how the user would know | honest evaluation |
+| 🔒 Data, leakage & pipeline | Live check that obs ≤ t − h; never-used columns; runway directionality; LLM/non-LLM split; the commands that download and process everything | technical soundness, automatic processing |
+| 🛬 Arrivals/hour (bonus) | P2's AAR-proxy forecast with P10–P90 band, RMSE table, and the P4 independent check when available | optional AAR |
+| 📝 Decision log | Every logged decision | trust & traceability |
 
 **Airport codes:** any code typed as IATA or ICAO is checked against `config/airports.yaml`. If the code isn't there, or has no events yet, the app says what's missing instead of failing.
 

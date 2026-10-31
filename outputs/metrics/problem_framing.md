@@ -1,8 +1,8 @@
 # Problem framing (P4, Task 5; updated for the organiser's main target: per-flight delay > 45 min)
 
 ## User
-- **Primary user:** the airline operations-control **duty manager** for the ATL or DFW hub. They decide hours ahead which departures and arrivals to protect, swap, re-crew or pre-cancel.
-- **Secondary user:** the FAA **traffic management coordinator (TMC)** at the tower or TRACON. They set the arrival rate and request Ground Delay Programs (GDPs) from the FAA Command Center (ATCSCC) [S1].
+- **Primary user:** the FAA **traffic management coordinator (TMC)** at the ATL or DFW tower or TRACON. They set the arrival and departure rate and request Ground Delay Programs or Ground Stops from ATCSCC [S1, S2]. The challenge asks for an "interactive dashboard for ATC".
+- **Second view:** the airline operations-control **duty manager** for the hub. They act on the same flight list: protect connections, swap aircraft, re-crew or pre-cancel.
 
 ## Problem statement (5 sentences)
 1. At ATL and DFW, the airline duty manager has to decide hours ahead which flights to protect, but the usual trigger is an FAA Ground Delay Program or Ground Stop issued once weather is already constraining the airport [S1, S2].
