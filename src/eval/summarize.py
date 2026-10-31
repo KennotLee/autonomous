@@ -40,6 +40,16 @@ def band_table():
     return "\n".join(lines)
 
 
+def cross_table():
+    df = pd.read_csv(OUT / "aar_cross_airport.csv")
+    lines = ["| test airport | trained on | setting | slice | rows (hours x 4 h) | model RMSE | schedule baseline "
+             "| vs schedule | mean pred | mean actual |", "|---|---|---|---|---|---|---|---|---|---|"]
+    for r in df.itertuples():
+        lines.append(f"| {r.test_airport} | {r.trained_on} | {r.setting} | {r.slice} | {r.n_rows} | **{r.rmse_model:.3f}** "
+                     f"| {r.rmse_schedule_baseline:.3f} | {-r.impr_vs_schedule_pct:+.1f}% | {r.mean_pred:.3f} | {r.mean_actual:.3f} |")
+    return "\n".join(lines)
+
+
 def delay_table(path):
     df = pd.read_csv(path)
     lines = ["| h | slice | flights | late | model PR-AUC | best baseline PR-AUC | global rate | vs best baseline "
@@ -63,6 +73,10 @@ def main():
              "### P10-P90 band calibration (nominal: 80% inside, 10% below, 10% above)\n",
              "Outcomes are whole numbers and mostly 0, so coverage above 80% partly reflects ties at 0.\n",
              band_table(), ""]
+    if (OUT / "aar_cross_airport.csv").exists():
+        parts += ["### Cross-airport generalisation (cross_airport.py; P2 v3 recipe without the icao input)\n",
+                  "cross = trained only on the other airport, scored on this one; the schedule baseline uses the "
+                  "training airport's completion ratio. Negative RMSE change = model better.\n", cross_table(), ""]
     for path in sorted(OUT.glob("delay_model_vs_baseline_*.csv")):
         name = path.stem.replace("delay_model_vs_baseline_", "")
         parts += [f"## Delay > 45 min: `{name}` vs P4 baselines\n",
@@ -71,7 +85,7 @@ def main():
     leak = OUT / "leakage_hub_state.csv"
     if leak.exists():
         lk = pd.read_csv(leak)
-        parts += ["## Leakage check: hub-state features bucketed by scheduled hour\n",
+        parts += ["## Leakage check: hub-state features bucketed by scheduled hour (P3 before b8618cc; fixed since)\n",
                   "| feature | window | measure | n | unknown at issue time |", "|---|---|---|---|---|"]
         parts += [f"| {r.feature} | {r.window_min} min | {r.measure} | {r.n} | {r.unknown_share:.1%} |" for r in lk.itertuples()]
     (OUT / "test_set_summary.md").write_text("\n".join(parts) + "\n", encoding="utf-8")
