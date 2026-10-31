@@ -140,8 +140,8 @@ def plain_driver(item):
     if "=" not in item:
         return item
     name, val = item.split("=", 1)
-    where = " at other end" if name.startswith("other_") else ""
-    name = name.removeprefix("other_")
+    where = " at other end" if name.startswith("other_") and name != "other_airport" else ""
+    name = name if name == "other_airport" else name.removeprefix("other_")
     lag = re.search(r"_lag(\d+)h$", name)
     when = f" ({lag.group(1)} h earlier)" if lag else ""
     name = re.sub(r"_lag\d+h$", "", name)
