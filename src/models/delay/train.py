@@ -29,6 +29,8 @@ MODEL_DIR = Path(__file__).resolve().parent / "artifacts"
 KEYS = ["event_id", "flight_key", "sched_time_local", "sched_time_utc", "feature_obs_time", "other_feature_obs_time"]
 TARGETS = ["delay_min", "label_45", "cancelled", "diverted"]
 CATEGORICAL = ["event_type", "airport", "other_airport", "carrier"]
+EVENT_WX = ["temp", "prcp", "wspd", "pres", "coco", "wdir", "headwind", "crosswind", "tailwind", "ts_flag",
+            "snow_flag", "pres_tend_3h", "prcp_sum_6h"]  # + <v>_lag{1,3,6}h
 PARAMS = dict(objective="binary", learning_rate=0.03, num_leaves=15, min_child_samples=50,
               subsample=0.8, subsample_freq=1, colsample_bytree=0.7, reg_lambda=5.0,
               random_state=0, verbose=-1)
@@ -50,9 +52,9 @@ def split_of(t: pd.Series) -> pd.Series:
 
 def feature_cols(ev: pd.DataFrame, oracle=False) -> list[str]:
     cols = [c for c in ev.columns if c not in KEYS + TARGETS + ["split"] and not c.startswith("oracle_")]
-    if oracle:  # oracle model: same-time weather replaces the lagged weather at the event airport
-        lagged = {"temp", "prcp", "wspd", "pres", "coco"}
-        cols = [c for c in cols if c not in lagged] + [c for c in ev.columns if c.startswith("oracle_")]
+    if oracle:  # oracle model: same-time weather replaces all lagged weather at the event airport
+        cols = [c for c in cols if c not in EVENT_WX and "_lag" not in c or c.startswith("other_")]
+        cols += [c for c in ev.columns if c.startswith("oracle_")]
     bad = [c for c in cols if c in KEYS + TARGETS or (c.startswith("oracle_") and not oracle)]
     assert not bad, f"leaky columns in features: {bad}"
     return cols
