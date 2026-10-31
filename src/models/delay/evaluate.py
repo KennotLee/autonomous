@@ -8,7 +8,7 @@ failure_cases.md. Thresholds and rule cut-offs never look at test data.
 """
 import json
 import warnings
-from itertools import product
+from itertools import permutations, product
 
 import lightgbm as lgb
 import matplotlib
@@ -205,7 +205,8 @@ def main():
     # ---- generalisation: train on one airport, test on the other (airport is constant -> dropped)
     gcols = [c for c in cols if c != "airport"]
     gen = []
-    for src, dst in (("KATL", "KDFW"), ("KDFW", "KATL")):
+    hubs = [a for a in config()["airports"] if (tr.airport == a).any()]  # from config/airports.yaml
+    for src, dst in permutations(hubs, 2):
         gm = fit(tr[tr.airport == src], va[va.airport == src], gcols, cats)
         d = te[te.airport == dst]
         gen.append({"train_airport": src, "test_airport": dst,
