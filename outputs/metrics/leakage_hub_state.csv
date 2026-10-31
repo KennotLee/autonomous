@@ -1,0 +1,4 @@
+feature,window_min,measure,n,unknown_share
+hub_sev_rate_3h,180,share of counted >45 min arrivals not yet landed,931,0.5999462943071965
+hub_arr_delay_mean,60,share of positive arrival-delay minutes not yet landed,9284,0.8583449081473129
+hub_dep_delay_mean,60,share of positive departure-delay minutes not yet departed,15947,0.8451281394794767
