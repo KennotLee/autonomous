@@ -9,7 +9,7 @@ Licence/terms are quoted from each source's own website; where that could not be
 | 0 | Organiser flight + weather CSV | P1 events and targets (its weather only as `oracle_*`) | provided by organisers (not fetched) | organiser-provided |
 | 0b | Organiser hourly weather ATL/DFW + data guide | P1 weather features (the only weather source in v2) | provided by organisers (not fetched) | organiser-provided; derived from Meteostat (see #1) |
 | 1 | Meteostat hourly weather (via the organiser file) | v2: indirectly — the organiser hourly file is Meteostat/NOAA ISD | none in v2 (the v1 Meteostat fetch code was removed) | CC BY 4.0 (attribution required) |
-| 2 | BTS Reporting Carrier On-Time Performance (full months) | P2 optional AAR target (arrivals per hour) | `src/models/aar_bts.py` | not checked |
+| 2 | BTS Reporting Carrier On-Time Performance (full months) | P2 optional AAR target (arrivals per hour) | `src/models/aar_bts.py` | not verified (site blocks automated checks) |
 | 3 | Iowa Environmental Mesonet (IEM) ASOS/METAR archive | standalone tool, not used by any model | `src/data/fetch_weather.py` | public domain |
 
 ---
@@ -60,7 +60,9 @@ Licence/terms are quoted from each source's own website; where that could not be
 - **Used by:** P2's optional arrivals (AAR) model only, as the target and recent-arrivals inputs. **Not used by the delay model (P3).**
 - **Why:** the organiser flights file is a ~0.5% sample, so hourly arrivals can't be measured from it; the data guide allows teams
   to "pull the full BTS on-time data automatically".
-- **Licence:** not checked (BTS policy page https://www.bts.gov/website-policies returned HTTP 403; the table page states no terms).
+- **Licence:** not verified. Checked 2026-10-31 15:20 SGT: https://www.bts.gov/website-policies and
+  https://www.bts.gov/policies-and-notices return HTTP 403 to automated requests; the TranStats table page states no
+  terms. BTS is a U.S. federal agency, but public-domain status is **not confirmed here**: check in a browser before claiming it.
 
 ## 3. Iowa Environmental Mesonet (IEM): ASOS/METAR archive
 - **Publisher:** Iowa Environmental Mesonet, Iowa State University.
