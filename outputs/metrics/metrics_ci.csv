@@ -1,0 +1,12 @@
+metric,estimate,ci_low,ci_high,reps,days
+pr_auc gbm,0.2187,0.1918,0.2500,200,213
+pr_auc base_rate,0.1319,0.1209,0.1471,200,213
+pr_auc rule,0.1379,0.1245,0.1534,200,213
+pr_auc no_weather,0.2067,0.1814,0.2365,200,213
+pr_auc true_oracle,0.2215,0.1930,0.2565,200,213
+pr_auc p1_oracle,0.2262,0.1974,0.2588,200,213
+pr_auc gbm - base_rate,0.0867,0.0642,0.1136,200,213
+pr_auc gbm - rule,0.0808,0.0578,0.1068,200,213
+pr_auc gbm - no_weather,0.0120,-0.0036,0.0288,200,213
+pr_auc true_oracle - gbm,0.0028,-0.0139,0.0194,200,213
+pr_auc p1_oracle - gbm,0.0075,-0.0041,0.0188,200,213

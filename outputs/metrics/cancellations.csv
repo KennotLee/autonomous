@@ -1,0 +1,13 @@
+airport,status,events,mean_risk_prob,share_flagged
+KATL,cancelled,46,0.1165,0.4402
+KATL,diverted arrival (no label),4,0.1113,0.6250
+KATL,"flown, delay <= 45",2679,0.0870,0.2824
+KATL,"flown, delay > 45",356,0.1162,0.5112
+KDFW,cancelled,75,0.1465,0.4833
+KDFW,diverted arrival (no label),4,0.1280,0.5000
+KDFW,"flown, delay <= 45",2288,0.1167,0.3463
+KDFW,"flown, delay > 45",399,0.1483,0.5069
+all,cancelled,121,0.1351,0.4669
+all,diverted arrival (no label),8,0.1197,0.5625
+all,"flown, delay <= 45",4967,0.1007,0.3118
+all,"flown, delay > 45",755,0.1332,0.5089

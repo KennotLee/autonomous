@@ -1,35 +1,37 @@
 # P3 · Delay risk model
 
-Per-flight P(`label_45`) = P(arrival delay > 45 min), using P1's label and features, h ∈ {3, 6, 9, 12}.
+P(`label_45`) = P(delay > 45 min) per ATL/DFW event (departure judged on `DEP_DELAY`, arrival on `ARR_DELAY`), for horizons h ∈ {3, 6, 9, 12}, from P1's `data/processed/event_features.parquet` (branch `p1`). If the file isn't present locally, `train.py` reads it from `origin/p1` via git.
 
 ```
-# 1. P1's features (branch p1)
-git show origin/p1:data/processed/flight_features.parquet > data/processed/flight_features.parquet
-# 2. Optional, for the hub congestion/state features: full BTS months + hub weather
-#    (hub weather is only for the failure-case chart and needs meteostat>=2;
-#     with the team's meteostat==1.7.6 add --skip-weather)
-python -m pipeline.download
-# 3. Train, evaluate, write outputs (~1 min)
-python -m src.models.delay.train
+python -m src.models.delay.train      # model + outputs/predictions/delay_preds.csv
+python -m src.models.delay.evaluate   # outputs/metrics/*
 ```
 
-## Inputs
-- **P1 `flight_features.parquet`:** one row per flight × h. The forecast time t = scheduled departure (UTC), and all weather is as of t − h. `label_45` is blank for cancelled/diverted flights; those are not scored but still get a prediction. `oracle_*` columns are used only by the oracle model.
-- **P3 additions:**
-  - **Thunderstorm / heavy-precipitation flags** at each end, derived from P1's `coco`.
-  - **Hub schedule congestion:** scheduled arrivals and departures at ATL/DFW in the hour the flight uses the hub. It comes from the full BTS schedule, which is known in advance; the team CSV is a 0.5% sample and can't measure congestion.
-  - **Hub state** in the last complete hour before t − h: arrival capacity ratio, severe-delay share, mean arrival and departure delay. Delays are counted in the hour each flight actually landed or left, so only delays known by t − h are used. A flight scheduled in that hour may still be in the air, and its delay isn't known yet.
-  - **Not used:** the hub cancellation rate. BTS doesn't record when a flight was cancelled, so it could be counted before it was known. It added nothing on test (PR-AUC 0.298 with it, 0.299 without).
-- Without the BTS files, the script skips the P3 additions and trains on P1 features only.
+## Features
+Every column except keys (`event_id`, `flight_key`, `sched_time_local`, `sched_time_utc`, `feature_obs_time`, `other_feature_obs_time`), targets (`delay_min`, `label_45`, `cancelled`, `diverted`) and `oracle_*` columns. An assert enforces this.
 
-## Model and evaluation
-- **Model:** one LightGBM per horizon.
-- **Split** (by scheduled departure): train < 2024-07, validation 2024-07..12 (early stopping and threshold choice), test 2025-01..07.
-- **Baselines:** base rate, a weather rule (thunderstorm/heavy-rain code, gust > 25 kt or wind > 20 kt at either end), and climatology by hub × direction × arrival hour.
-- **Ablation:** `gbm_p1_only` uses P1's features only.
-- **Threshold:** maximum F1 on validation. The trade-off table in the metrics shows other operating points.
+- Categorical: `event_type`, `airport`, `other_airport`, `carrier`.
+- `h` is a feature (one model for all horizons).
+
+## Split and training
+- Split by `sched_time_utc`: train 2023-01..2024-06, validation 2024-07..12 (early stopping and threshold), test 2025 (data ends Jul 2025).
+- Rows with `label_45` NaN (cancelled, diverted arrivals) are not trained or evaluated. They still get a row in `delay_preds.csv`.
+- No class reweighting, which keeps probabilities calibrated for the Brier score and reliability curve. Imbalance is handled by the decision threshold, set to max F1 on validation.
 
 ## Outputs
-- `outputs/predictions/delay_preds.csv`: contract columns `flight_id, sched_time_utc, h, p_delay45`, plus `high_risk`, `top_drivers` (the three TreeSHAP log-odds contributions that push risk up), `label_45` and `split`. Rows from train/validation are in-sample: score only `split == "test"`.
-- `outputs/metrics/delay_metrics.md`, `delay_calibration.png`, `delay_pr_curve.png`.
-- `outputs/metrics/delay_failure_case.md` + `.png`: worst missed day, auto-selected. The narrative comes from `failure_notes.md`.
+- `outputs/predictions/delay_preds.csv`: columns `event_id`, `airport`, `event_type`, `sched_time_utc`, `h`, `risk_prob`, `high_risk`, `top_drivers` (see `outputs/predictions/SCHEMA.md`), for every 2025 row of `event_features` (join coverage asserted 100%).
+  - `top_drivers`: up to 3 features pushing risk up, from LightGBM `pred_contrib`, formatted `feature=value` and joined by `; `.
+- `src/models/delay/artifacts/`: `gbm.txt` (model) and `meta.json` (per-airport thresholds, global threshold, feature list, md5 of the `event_features.parquet` it was trained on; `evaluate.py` warns if the file has changed).
+- `outputs/metrics/`:
+  - `metrics.csv`: precision, recall, PR-AUC, Brier, alert rate for the model, the single-threshold model, the weather rule and the base rate; overall, per h, airport, event_type and bad-weather slice (feature time and event hour).
+  - `metrics_ci.csv`: 95% CIs from a day-block bootstrap (200 reps over 2025 dates).
+  - `threshold.md`: per-airport thresholds (max F1 on validation).
+  - `calibration.png`, `oracle_gap.csv` (true event-hour oracle from the organiser hourly file), `generalisation.csv` (ATL <-> DFW).
+  - `failure_cases.md`: worst misses, false alarms, alert workload.
+  - `cancellations.csv`: mean risk for cancelled vs flown 2025 events (not scored).
+  - `notes.md`: demo notes and caveats.
+- Needs the organiser hourly file at the path in `config/airports.yaml` (`weather.hourly_file`, `data/raw/...`) for `evaluate.py`.
+
+## Baselines
+- **Base rate:** the training positive rate.
+- **Weather rule:** `ts_flag` OR crosswind >= c OR tailwind >= t, with c and t chosen on train only (max F1).
