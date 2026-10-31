@@ -97,6 +97,7 @@
     "cancellations": "excluded: realised outcome",
     "diversions": "excluded: realised outcome",
     "feature_obs_time": "timestamp/identifier",
+    "weather_stamp_utc": "non-numeric dtype datetime64[ns, UTC]",
     "oracle_temp_c": "excluded prefix (oracle_/arr_count)",
     "oracle_dewpoint_c": "excluded prefix (oracle_/arr_count)",
     "oracle_rel_humidity_pct": "excluded prefix (oracle_/arr_count)",
