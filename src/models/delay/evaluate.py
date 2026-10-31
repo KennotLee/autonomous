@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, brier_score_loss
 
-from .train import MET_DIR, MODEL_DIR, ROOT, X, choose_threshold, config, feature_cols, fit, iata_to_icao, prepare
+from .train import MET_DIR, MODEL_DIR, PRED_DIR, ROOT, X, choose_threshold, config, feature_cols, fit, iata_to_icao, prepare
 
 # organiser hourly weather (config weather.hourly_file; P1's weather source), used only for the true oracle
 TRUE_ORACLE = {"temp_c": "temp", "precip_mm": "prcp", "wind_speed_kmh": "wspd", "pressure_hpa": "pres",
@@ -235,6 +235,44 @@ def main():
                   f"- feature_obs_time {r.feature_obs_time}: " + ", ".join(f"{k}={v:.3g}" for k, v in seen.items()),
                   "- oracle: " + ", ".join(f"{k}={v:.3g}" for k, v in orac.items()),
                   f"- likely reason: {reason}\n"]
+
+    # false alarms: highest-risk events that were not severely delayed (one row per event)
+    drivers = pd.read_csv(PRED_DIR / "delay_preds.csv", usecols=["event_id", "h", "top_drivers"])
+    fp = te[(te.label_45 == 0) & (te.p_gbm >= te.thr_gbm)].sort_values("p_gbm", ascending=False)
+    fp = fp.drop_duplicates("event_id").head(3).merge(drivers, on=["event_id", "h"], how="left")
+    cw = float(np.nanquantile(tr.crosswind, 0.95))
+    lines += ["# False alarms: 3 highest-risk events that were not severely delayed\n",
+              "Flagged (risk >= the airport's threshold) but delay <= 45 min; one row per event.\n"]
+    for r in fp.itertuples():
+        seen = {c: getattr(r, c) for c in wx}
+        orac = {c: getattr(r, c) for c in owx}
+        bad = [n for n, ok in (("thunderstorm", r.ts_flag == 1), (f"condition code {r.coco:.0f} (rain or worse)", r.coco >= 7),
+                               (f"rain {r.prcp:.1f} mm", r.prcp >= HEAVY_RAIN_MM),
+                               (f"crosswind {r.crosswind:.0f} km/h", r.crosswind >= cw)) if ok]
+        reason = (f"adverse weather was visible at feature_obs_time ({', '.join(bad)}) and pushed the risk up "
+                  f"(top drivers: {r.top_drivers}), but the event ran only {r.delay_min:.0f} min late" if bad else
+                  f"no adverse weather at feature_obs_time; the risk came from the top drivers ({r.top_drivers})")
+        lines += [f"## {r.event_id} (h = {r.h})",
+                  f"- scheduled {r.sched_time_local} local ({r.sched_time_utc} UTC), {r.event_type} at {r.airport}, "
+                  f"carrier {r.carrier}; delay {r.delay_min:.0f} min; predicted risk {r.p_gbm:.3f} "
+                  f"(threshold {r.thr_gbm:.3f})",
+                  f"- feature_obs_time {r.feature_obs_time}: " + ", ".join(f"{k}={v:.3g}" for k, v in seen.items()),
+                  "- oracle: " + ", ".join(f"{k}={v:.3g}" for k, v in orac.items()),
+                  f"- top drivers: {r.top_drivers}",
+                  f"- likely reason: {reason}\n"]
+
+    # alert workload at the per-airport thresholds
+    flag = te.p_gbm >= te.thr_gbm
+    lines += ["# Alert workload (test 2025, per-airport thresholds)\n",
+              "| airport | events x h | flagged | alert rate | precision | false alerts per true alert |",
+              "|---|---|---|---|---|---|"]
+    for ap, g in [("all", te)] + list(te.groupby("airport")):
+        f = flag[g.index]
+        prec = g.label_45[f].mean()
+        lines.append(f"| {ap} | {len(g):,} | {f.sum():,} | {f.mean():.1%} | {prec:.3f} | {(1 - prec) / prec:.1f} |")
+    prec = te.label_45[flag].mean()
+    lines += ["", f"Precision {prec:.3f}: about {round((1 - prec) * 5)} of every 5 alerts are false. "
+              "The flight CSV is a ~0.5% sample, so counts are not real daily volumes; use the rates.\n"]
     (MET_DIR / "failure_cases.md").write_text("\n".join(lines))
 
     (MET_DIR / "notes.md").write_text(
