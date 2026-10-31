@@ -20,6 +20,10 @@ more than 45 min late (departures: `DEP_DELAY`, arrivals: `ARR_DELAY`; ~10% are)
 git clone https://github.com/KennotLee/autonomous.git && cd autonomous
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
+**Windows:** use `py -m venv .venv`, then replace `.venv/bin/` with `.venv\Scripts\` in every command
+(e.g. `.venv\Scripts\python scripts\run_pipeline.py --airports ATL DFW`, `.venv\Scripts\streamlit run app\app.py`).
+All code uses `pathlib` and UTF-8 file reading, so it is OS-independent.
+
 Put the organiser files (`Flight_Data_With_Weather_Final.csv`, `challenge5_hourly_weather_ATL_DFW.csv`,
 `challenge5_data_guide.xlsx`) in `data/raw/` (not in git).
 
@@ -30,6 +34,7 @@ Put the organiser files (`Flight_Data_With_Weather_Final.csv`, `challenge5_hourl
 .venv/bin/python tests/test_leakage.py                          # must print ALL LEAKAGE CHECKS PASSED
 .venv/bin/python -m src.models.delay.train                      # delay model + predictions
 .venv/bin/python -m src.models.delay.evaluate                   # metrics, calibration, oracle gap, failure cases
+.venv/bin/streamlit run app/app.py                             # dashboard
 # optional AAR: downloads ~31 monthly BTS files first
 .venv/bin/python -m src.models.aar_bts && .venv/bin/python -m src.models.aar_dataset && .venv/bin/python -m src.models.train_aar
 ```
