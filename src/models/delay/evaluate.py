@@ -71,6 +71,36 @@ def scores(y, p, thr):
                   "alert_rate": flag.mean()}
 
 
+CI_SINGLE = ["gbm", "base_rate", "rule", "no_weather", "true_oracle", "p1_oracle"]
+CI_DIFF = [("gbm", "base_rate"), ("gbm", "rule"), ("gbm", "no_weather"), ("true_oracle", "gbm"), ("p1_oracle", "gbm")]
+
+
+def bootstrap_ci(te: pd.DataFrame, reps=200, seed=0) -> list[dict]:
+    """95% CIs for test PR-AUC and PR-AUC differences, resampling whole local scheduled
+    dates (events on the same day share weather and airport state, so they aren't independent)."""
+    day = te.sched_time_local.dt.date.to_numpy()
+    groups = [np.flatnonzero(day == d) for d in np.unique(day)]
+    y = te.label_45.to_numpy()
+    p = {n: te[f"p_{n}"].to_numpy() for n in CI_SINGLE}
+    rng = np.random.default_rng(seed)
+    draws = {n: [] for n in CI_SINGLE}
+    for _ in range(reps):
+        i = np.concatenate([groups[k] for k in rng.integers(0, len(groups), len(groups))])
+        for n in CI_SINGLE:
+            draws[n].append(average_precision_score(y[i], p[n][i]))
+    draws = {n: np.array(v) for n, v in draws.items()}
+    point = {n: average_precision_score(y, p[n]) for n in CI_SINGLE}
+    rows = [{"metric": f"pr_auc {n}", "estimate": point[n], "ci_low": np.percentile(draws[n], 2.5),
+             "ci_high": np.percentile(draws[n], 97.5)} for n in CI_SINGLE]
+    for a, b in CI_DIFF:
+        d = draws[a] - draws[b]
+        rows.append({"metric": f"pr_auc {a} - {b}", "estimate": point[a] - point[b],
+                     "ci_low": np.percentile(d, 2.5), "ci_high": np.percentile(d, 97.5)})
+    for r in rows:
+        r |= {"reps": reps, "days": len(groups)}
+    return rows
+
+
 def main():
     ev, lab, cats = prepare()
     lab = add_true_oracle(lab)
@@ -133,7 +163,8 @@ def main():
     pcols = feature_cols(ev, oracle=True)
     tcols = [c for c in pcols if not c.startswith("oracle_")] + [c for c in lab.columns if c.startswith("true_oracle_")]
     print(f"true-oracle weather found for {te.true_oracle_temp.notna().mean():.2%} of test rows")
-    for name, oc in (("p1_oracle", pcols), ("true_oracle", tcols)):
+    ncols = [c for c in pcols if not c.startswith("oracle_")]  # no event-airport weather at all
+    for name, oc in (("p1_oracle", pcols), ("true_oracle", tcols), ("no_weather", ncols)):
         te[f"p_{name}"] = fit(tr, va, oc, cats).predict_proba(X(te, oc, cats))[:, 1]
     gap = pd.DataFrame([{"h": h, "pr_auc_lagged": average_precision_score(g.label_45, g.p_gbm),
                          "pr_auc_true_oracle": average_precision_score(g.label_45, g.p_true_oracle),
@@ -141,6 +172,9 @@ def main():
                         for h, g in [("all", te)] + list(te.groupby("h"))])
     gap["gap_true_oracle"] = gap.pr_auc_true_oracle - gap.pr_auc_lagged
     gap.to_csv(MET_DIR / "oracle_gap.csv", index=False, float_format="%.4f")
+
+    # ---- uncertainty: day-block bootstrap (resample local scheduled dates, all events of a day together)
+    pd.DataFrame(bootstrap_ci(te)).to_csv(MET_DIR / "metrics_ci.csv", index=False, float_format="%.4f")
 
     # ---- generalisation: train on one airport, test on the other (airport is constant -> dropped)
     gcols = [c for c in cols if c != "airport"]
