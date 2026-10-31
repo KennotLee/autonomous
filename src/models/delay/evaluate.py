@@ -15,10 +15,9 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, brier_score_loss
 
-from .train import MET_DIR, MODEL_DIR, ROOT, X, choose_threshold, feature_cols, fit, prepare
+from .train import MET_DIR, MODEL_DIR, ROOT, X, choose_threshold, config, feature_cols, fit, iata_to_icao, prepare
 
-# organiser hourly weather (the file P1's weather features come from); used only for the true oracle
-HOURLY = ROOT / "data" / "original_datasets" / "challenge5_hourly_weather_ATL_DFW.csv"
+# organiser hourly weather (config weather.hourly_file; P1's weather source), used only for the true oracle
 TRUE_ORACLE = {"temp_c": "temp", "precip_mm": "prcp", "wind_speed_kmh": "wspd", "pressure_hpa": "pres",
                "condition_code": "coco", "wind_dir_deg": "wdir", "headwind_kmh": "headwind",
                "crosswind_kmh": "crosswind", "tailwind_kmh": "tailwind"}
@@ -27,10 +26,12 @@ TRUE_ORACLE = {"temp_c": "temp", "precip_mm": "prcp", "wind_speed_kmh": "wspd", 
 def add_true_oracle(df: pd.DataFrame) -> pd.DataFrame:
     """Event-airport weather at the event's own UTC hour, floor(sched_time_utc): never
     known 3-12 h ahead, so it only measures what leakage would fake."""
-    w = pd.read_csv(HOURLY, parse_dates=["time_utc"])
-    w = w.assign(airport="K" + w.airport, _hour=w.time_utc.dt.tz_localize("UTC"))
+    cfg = config()
+    w = pd.read_csv(ROOT / cfg["weather"]["hourly_file"], parse_dates=["time_utc"])
+    w = w.assign(airport=w.airport.map(iata_to_icao(cfg)), _hour=w.time_utc.dt.tz_localize("UTC"))
     w = w[["airport", "_hour"] + list(TRUE_ORACLE)].rename(columns={k: f"true_oracle_{v}" for k, v in TRUE_ORACLE.items()})
-    w["true_oracle_ts_flag"] = w.true_oracle_coco.isin([25, 26, 27]).astype(float).where(w.true_oracle_coco.notna())
+    ts = cfg["weather"]["thunderstorm_codes"]
+    w["true_oracle_ts_flag"] = w.true_oracle_coco.isin(ts).astype(float).where(w.true_oracle_coco.notna())
     out = df.assign(_hour=df.sched_time_utc.dt.floor("h")).merge(w, on=["airport", "_hour"], how="left")
     return out.drop(columns="_hour").set_index(df.index)
 

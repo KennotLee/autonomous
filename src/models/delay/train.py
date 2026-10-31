@@ -19,6 +19,7 @@ from pathlib import Path
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+import yaml
 from sklearn.metrics import precision_recall_curve
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -37,13 +38,28 @@ PARAMS = dict(objective="binary", learning_rate=0.03, num_leaves=15, min_child_s
 TRAIN_END, VAL_END = pd.Timestamp("2024-07-01", tz="UTC"), pd.Timestamp("2025-01-01", tz="UTC")
 
 
+def _p1_blob(path: str) -> bytes:
+    return subprocess.run(["git", "show", f"origin/p1:{path}"], cwd=ROOT, capture_output=True, check=True).stdout
+
+
 def load() -> pd.DataFrame:
     """P1's file; if it isn't checked out locally, read it from origin/p1."""
     if DATA.exists():
         return pd.read_parquet(DATA)
-    blob = subprocess.run(["git", "show", "origin/p1:data/processed/event_features.parquet"],
-                          cwd=ROOT, capture_output=True, check=True).stdout
-    return pd.read_parquet(io.BytesIO(blob))
+    return pd.read_parquet(io.BytesIO(_p1_blob("data/processed/event_features.parquet")))
+
+
+def config() -> dict:
+    """config/airports.yaml (P1 owns it). Until p1 is merged here, the local copy may predate
+    the `weather` section; then read P1's version from origin/p1."""
+    cfg = yaml.safe_load((ROOT / "config" / "airports.yaml").read_text())
+    if "weather" not in cfg:
+        cfg = yaml.safe_load(_p1_blob("config/airports.yaml"))
+    return cfg
+
+
+def iata_to_icao(cfg: dict) -> dict[str, str]:
+    return {a["iata"]: icao for icao, a in cfg["airports"].items()}
 
 
 def split_of(t: pd.Series) -> pd.Series:
