@@ -26,6 +26,20 @@ def aar_table():
     return "\n".join(lines)
 
 
+def band_table():
+    df = pd.read_csv(OUT / "aar_model_vs_baseline.csv")
+    if "band_model_coverage" not in df:
+        return "(model predictions have no p10/p90)"
+    lines = ["| slice | icao | h | hours | model coverage | below p10 | above p90 | mean width "
+             "| schedule-baseline coverage | below p10 | above p90 | mean width |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for r in df.itertuples():
+        lines.append(f"| {r.slice} | {r.icao} | {r.h} | {r.n_hours} | **{r.band_model_coverage:.1%}** | {r.band_model_below_p10:.1%} "
+                     f"| {r.band_model_above_p90:.1%} | {r.band_model_width:.2f} | {r.band_sched_coverage:.1%} "
+                     f"| {r.band_sched_below_p10:.1%} | {r.band_sched_above_p90:.1%} | {r.band_sched_width:.2f} |")
+    return "\n".join(lines)
+
+
 def delay_table(path):
     df = pd.read_csv(path)
     lines = ["| h | slice | flights | late | model PR-AUC | best baseline PR-AUC | global rate | vs best baseline "
@@ -45,7 +59,10 @@ def main():
              "(AAR: whole days resampled; delay: flights resampled). Negative RMSE change = model better.\n",
              "## Hourly arrivals (AAR proxy): P2 LightGBM vs P4 baselines\n",
              "Caveat: arr_count comes from a ~0.5% BTS sample (0 in ~82% of hours). This compares models on this "
-             "target; it is not real runway-capacity accuracy.\n", aar_table(), ""]
+             "target; it is not real runway-capacity accuracy.\n", aar_table(), "",
+             "### P10-P90 band calibration (nominal: 80% inside, 10% below, 10% above)\n",
+             "Outcomes are whole numbers and mostly 0, so coverage above 80% partly reflects ties at 0.\n",
+             band_table(), ""]
     for path in sorted(OUT.glob("delay_model_vs_baseline_*.csv")):
         name = path.stem.replace("delay_model_vs_baseline_", "")
         parts += [f"## Delay > 45 min: `{name}` vs P4 baselines\n",

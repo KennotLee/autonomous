@@ -16,7 +16,7 @@ python src/eval/baselines.py all          # baselines + CSV-weather alignment ch
 # fetch teammates' predictions from their branches (Git Bash; PowerShell's > re-encodes files)
 git show origin/p2:outputs/predictions/aar_preds.csv   > data/interim/p2_aar_preds.csv
 git show origin/p3:outputs/predictions/delay_preds.csv > data/interim/p3_delay_preds.csv
-python src/eval/evaluate_aar.py   --preds data/interim/p2_aar_preds.csv            # P2 column pred_lgbm
+python src/eval/evaluate_aar.py   --preds data/interim/p2_aar_preds.csv --model-col pred_arr_count   # band: p10, p90
 python src/eval/evaluate_delay.py --preds data/interim/p3_delay_preds.csv --name p3_gbm
 python src/eval/leakage_checks.py
 python src/eval/summarize.py              # -> outputs/metrics/test_set_summary.md
@@ -30,7 +30,7 @@ Needs P1's `data/processed/*.parquet` (branch `p1`), `config/airports.yaml`, the
 | file | what it does | output in `outputs/metrics/` |
 |---|---|---|
 | `baselines.py` | delay baselines: global rate, smoothed rate per origin × local dep hour × month, and dest × arr hour × month. Arrival baselines: persistence of the last *completed* hour before t − h, hour-of-day / hour-of-week means, scheduled arrivals × train completion ratio. P10/P90 from train residuals. Also checks the raw CSV's weather alignment. | `delay_baseline_*.csv`, `delay_share_by_hub.csv`, `aar_baseline_*.csv`, `weather_alignment_check.csv` |
-| `evaluate_aar.py` | P2 predictions vs baselines on identical test hours, per icao × h × slice, with a 90% day-block bootstrap CI | `aar_model_vs_baseline.csv` |
+| `evaluate_aar.py` | P2 predictions vs baselines on identical test hours, per icao × h × slice, with a 90% day-block bootstrap CI and P10–P90 band calibration (model vs schedule-baseline band) | `aar_model_vs_baseline.csv` |
 | `evaluate_delay.py` | delay model vs baselines on identical test flights, per h × slice, with a 90% bootstrap CI | `delay_model_vs_baseline_<name>.csv` |
 | `leakage_checks.py` | measures how much of a scheduled-hour "hub state" feature is unknowable at issue time | `leakage_hub_state.csv` |
 | `summarize.py` | builds the test-set summary tables | `test_set_summary.md` |
@@ -38,19 +38,24 @@ Needs P1's `data/processed/*.parquet` (branch `p1`), `config/airports.yaml`, the
 
 ## Findings (test set 2025)
 
-### 1. Hourly arrivals (AAR proxy): P2 LightGBM v2 beats every baseline
+### 1. Hourly arrivals (AAR proxy): P2 LightGBM v3 (`6ac3dcf`) beats every baseline
 | airport | model RMSE | schedule baseline | hour-of-week mean | persistence | vs strongest baseline (90% CI of RMSE diff) |
 |---|---|---|---|---|---|
-| KATL | **0.369–0.370** | 0.431 | 0.503 | 0.723–0.737 | −14.2% to −14.4% ([−0.072, −0.052]) |
-| KDFW | **0.342–0.343** | 0.419 | 0.426 | 0.615–0.626 | −18.1% to −18.2% ([−0.086, −0.066]) |
+| KATL | **0.370–0.371** | 0.431 | 0.503 | 0.723–0.737 | −13.9% to −14.2% ([−0.071, −0.051]) |
+| KDFW | **0.342–0.343** | 0.419 | 0.426 | 0.615–0.626 | −18.2% to −18.3% ([−0.086, −0.066]) |
 
-The ranges cover h = 3, 6, 9 and 12, over 5,092 KATL and 5,093 KDFW hours.
+The ranges cover h = 3, 6, 9 and 12, over 5,092 KATL and 5,093 KDFW hours. The v3 point forecasts are essentially the same as v2's. v3's new hub weather-exposure inputs are leak-safe: P1 weather at t − h times the published schedule, with a fail-closed input allowlist.
+
+- **P10–P90 band:**
+  - Coverage is 87–89% in hours with scheduled arrivals (nominal 80%) and 93–94% over all hours.
+  - 0% of outcomes fall below P10 (P10 is 0, which is correct for 0–2 scheduled flights). 12–13% exceed P90 in busy hours, so the top of the band is slightly narrow.
+  - My schedule-baseline band (train residual quantiles) is nearly zero-width (0.01–0.02) and covers only 44–49% of busy hours. Use P2's band in the dashboard, not mine.
 
 - **Quote the gain against the schedule baseline,** not the historical average. The model is driven by the published schedule (target hour plus neighbours, about 90% of gain). The schedule baseline shows how much the model adds beyond simply reading the schedule.
 - **Skill is flat across h.** P2's validation ablation shows weather adds no skill on this sample. Even perfect same-hour weather gains only about 0.4% on bad-weather hours. Present this honestly: *the sample (about 5 arrivals per day) is too sparse for weather to show; this is not evidence that weather doesn't matter.*
 - **Snow/storm hours are a failure case.**
-  - KDFW (62 hours): the plain hour-of-week mean (RMSE 0.270) beats the model (0.344–0.359) by 27–33%.
-  - KATL (102 hours): the model's edge over the schedule baseline is not significant at h = 3, 6 and 9 (the CI reaches +0.003 to +0.007).
+  - KDFW (62 hours): the plain hour-of-week mean (RMSE 0.270) beats the model (0.334–0.366) by 24–35%.
+  - KATL (102 hours): the model's edge over the schedule baseline is not significant at h = 3, 6 and 9 (the CI reaches 0.000 to +0.012).
 - **Caveat:** `arr_count` is 0 in about 82% of hours (a 0.5% BTS sample). This RMSE is not runway-capacity accuracy.
 
 ### 2. Delay > 45 min: P3 `gbm` beats the baselines overall, but its headline is inflated by leakage
@@ -76,10 +81,10 @@ The test set has 5,641 hub flights, 767 of them late. Cancelled and diverted fli
 |---|---|
 | P1 features: `feature_obs_time ≤ t − h` | ✅ passes on 100% of rows in both parquets |
 | Raw CSV weather | ❌ misaligned by 4–6 h (naive local-as-UTC key matches 95–100% of rows, correct UTC key 5–6%; `weather_alignment_check.csv`). Not used by anyone. |
-| P2 AAR v2 | ✅ no outcome or `oracle_*` inputs; persistence uses only completed hours; neighbouring-hour schedule is known in advance; ablation run on validation only |
+| P2 AAR v3 | ✅ no outcome or `oracle_*` inputs; persistence uses only completed hours; neighbouring-hour schedule is known in advance; hub/origin weather-exposure inputs use obs ≤ t − h; fail-closed input allowlist; ablation run on validation only |
 | P3 delay `gbm` | ❌ `hub_*` ops-state leak (above). `hub_sched_*` (schedule) is fine. |
 
 ### Open requests
-- **P2:** add P10/P90 to `aar_preds.csv`, and rename `pred_lgbm` → `pred_arr_count` (CLAUDE.md schema) so P3's dashboard can show uncertainty.
+- ~~P2: add P10/P90 and use `pred_arr_count`~~ — done in `6ac3dcf`.
 - **P3:** fix or drop the leaky `hub_*` features, and add `gbm_p1_only` predictions to `delay_preds.csv`.
-- **P1:** add `scikit-learn`, `lightgbm` and `pytest` to `requirements.txt`.
+- **P1:** add `scikit-learn` to `requirements.txt`. `lightgbm` and `pytest` were added in `1fd3662`.
