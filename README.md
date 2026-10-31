@@ -7,7 +7,7 @@ Horizons h are in {3, 6, 9, 12} h. Only features observed at or before target ti
 Schemas and the team contract live in CLAUDE.md.
 
 ## Setup
-hello
+
 ```
 git clone <REPO_URL>
 cd aar_hackathon
