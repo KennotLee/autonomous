@@ -1,41 +1,44 @@
 # Per-airport config (P1 owns). Code in src/ must read airports from here; no hardcoded airports.
-# runway_heading_deg: organiser assumption (all ops on this heading). Used as given (not corrected for
-#   magnetic vs true north; wind direction from Meteostat is true north).
-# timezone: IANA tz, from Meteostat station metadata (Stations().fetch(), row where icao == key),
-#   checked 2026-10-31.
-# meteostat: always look the station up at runtime by ICAO via the meteostat package; do not
-#   hardcode station IDs here.
-# iata: code used in the BTS on-time data (ORIGIN / DEST columns).
+# runway_heading_deg: organiser assumption (data guide: "Assumed heading: ATL 80, DFW 180"); used as given.
+# timezone: IANA tz of the airport (flight times in the BTS file are local hhmm).
+# iata: code used in the BTS flights file (ORIGIN / DEST) and in the hourly weather file (`airport`).
+# Any configured airport can be selected by IATA or ICAO (scripts/run_pipeline.py --airports ATL KDFW).
 
 airports:
   KATL:
     iata: ATL
     runway_heading_deg: 80
     timezone: America/New_York
-    meteostat:
-      lookup: icao
   KDFW:
     iata: DFW
     runway_heading_deg: 180
     timezone: America/Chicago
-    meteostat:
-      lookup: icao
 
-# Other airports on hub flights are resolved automatically: ICAO = 'K'+IATA, else 'P'+IATA, if that
-# ICAO exists in the Meteostat station list (timezone taken from Meteostat). Exceptions below were
-# checked against Meteostat Stations().fetch() on 2026-10-31.
+# other_airport ICAO for non-configured airports: 'P'+IATA in AK/HI/GU, else 'K'+IATA, except these
+# (verified against the Meteostat station list on 2026-10-31).
 iata_icao_overrides:
-  SJU: {icao: TJSJ}
-  OGG: {icao: PHOG}
-  STT: {icao: TIST}
-  STX: {icao: TISX}
-  FCA: {icao: KGPI}
-  # Lawton-Fort Sill Regional: KLAW is not in Meteostat -> no weather (NaN), timezone given here.
-  LAW: {icao: KLAW, timezone: America/Chicago, meteostat: false}
+  SJU: TJSJ
+  OGG: PHOG
+  STT: TIST
+  STX: TISX
+  FCA: KGPI
+  BQN: TJBQ
+  PSE: TJPS
+  SPN: PGSN
 
-meteostat:
-  weather_start: "2022-12-30"   # >= 18 h before first flight for 12 h horizon + 6 h rolling window
-  weather_end: "2025-08-02"
-  asof_tolerance_hours: 2
-  horizons: [3, 6, 9, 12]
-  rolling_windows_hours: [3, 6]
+weather:
+  # Organiser-provided hourly weather (data/raw/challenge5_hourly_weather_ATL_DFW.csv; data guide xlsx).
+  hourly_file: data/raw/challenge5_hourly_weather_ATL_DFW.csv
+  # The file's time_utc can precede the METAR it holds by up to ~52 min (checked against IEM METAR,
+  # KATL 2024-06-30/07-01), so a row counts as available at time_utc + 1 h.
+  availability_lag_hours: 1
+  asof_tolerance_hours: 2       # use the latest row available <= t - h, at most this much older; else NaN
+  lags_hours: [1, 3, 6]
+  pressure_tendency_hours: 3
+  precip_sum_hours: 6
+  # Meteostat condition codes per data guide: 14-16 snow, 25-27 thunderstorm.
+  thunderstorm_codes: [25, 26, 27]
+  snow_codes: [14, 15, 16]
+
+horizons: [3, 6, 9, 12]
+delay_threshold_min: 45

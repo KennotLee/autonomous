@@ -1,11 +1,10 @@
-"""Single entry point: build data/processed/{hourly,flight}_features.parquet.
+"""Single entry point: build data/processed/event_features.parquet (+ a 5-row sample CSV).
 
 Usage:
-  .venv/bin/python scripts/run_pipeline.py --icao KATL KDFW --start 2023-01-01 --end 2025-07-31 \
-      [--weather-scope hubs|all]
-
---weather-scope hubs : fetch weather only for the hub ICAOs; other-airport features are NaN (fast).
---weather-scope all  : also fetch every other airport seen on hub flights (slow first time, cached).
+  .venv/bin/python scripts/run_pipeline.py --airports ATL DFW [--start 2023-01-01 --end 2025-07-31]
+      [--raw data/raw/Flight_Data_With_Weather_Final.csv] [--weather data/raw/challenge5_hourly_weather_ATL_DFW.csv]
+Airports may be given as IATA or ICAO; they must be configured in config/airports.yaml and present in
+the hourly weather file (otherwise their weather features are NaN).
 """
 import argparse
 import json
@@ -16,57 +15,44 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd  # noqa: E402
 
-from src.data.build import build_flight, build_hourly, weather_table  # noqa: E402
-from src.data.config import INTERIM, PROCESSED, RAW_CSV, hub_airports, load_config  # noqa: E402
-from src.data.flights import load_hub_flights  # noqa: E402
-from src.data.weather import fetch_all, resolve_airports  # noqa: E402
+from src.data.build_events import build_event_features  # noqa: E402
+from src.data.config import INTERIM, PROCESSED, RAW_CSV, REPO, hub_airports, load_config  # noqa: E402
+from src.data.events import build_events  # noqa: E402
+from src.data.hourly_weather import load_hourly  # noqa: E402
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--icao", nargs="+", default=None, help="hub ICAOs from config/airports.yaml")
-    ap.add_argument("--start", default=None, help="first FL_DATE to keep (YYYY-MM-DD)")
-    ap.add_argument("--end", default=None, help="last FL_DATE to keep (YYYY-MM-DD)")
-    ap.add_argument("--weather-scope", choices=["hubs", "all"], default="hubs")
+    ap.add_argument("--airports", "--icao", nargs="+", default=None, help="IATA or ICAO codes (default: all configured)")
+    ap.add_argument("--start", default=None, help="first local flight date to keep (YYYY-MM-DD)")
+    ap.add_argument("--end", default=None, help="last local flight date to keep (YYYY-MM-DD)")
     ap.add_argument("--raw", default=str(RAW_CSV))
+    ap.add_argument("--weather", default=None)
+    ap.add_argument("--out", default=str(PROCESSED / "event_features.parquet"))
     args = ap.parse_args()
 
     cfg = load_config()
-    hubs = hub_airports(cfg, args.icao)
-    hub_iatas = [v["iata"] for v in hubs.values()]
+    hubs = hub_airports(cfg, args.airports)
+    wx_path = args.weather or str(REPO / cfg["weather"]["hourly_file"])
     INTERIM.mkdir(parents=True, exist_ok=True)
-    PROCESSED.mkdir(parents=True, exist_ok=True)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
 
-    od = pd.read_csv(args.raw, usecols=["ORIGIN", "DEST"])
-    od = od[od.ORIGIN.isin(hub_iatas) | od.DEST.isin(hub_iatas)]
-    airports = resolve_airports(set(od.ORIGIN) | set(od.DEST), cfg)
-    airports.loc[airports.icao.isin(hubs), "runway_heading_deg"] = [
-        float(hubs[i]["runway_heading_deg"]) for i in airports.loc[airports.icao.isin(hubs), "icao"]]
-    airports.loc[~airports.icao.isin(hubs), "runway_heading_deg"] = float("nan")
-    airports.to_csv(INTERIM / "airports_resolved.csv", index=False)
-
-    flights, val = load_hub_flights(args.raw, hub_iatas, airports)
+    ev, stats = build_events(args.raw, hubs, cfg)
     if args.start:
-        flights = flights[flights.fl_date >= args.start]
+        ev = ev[ev.sched_time_local >= pd.Timestamp(args.start)]
     if args.end:
-        flights = flights[flights.fl_date <= args.end]
-    print("validation:", json.dumps(val))
+        ev = ev[ev.sched_time_local < pd.Timestamp(args.end) + pd.Timedelta(days=1)]
+    wx = load_hourly(wx_path, cfg)
+    wx.to_parquet(INTERIM / "hourly_weather_features.parquet", index=False)  # used by tests/test_leakage.py
+    feats = build_event_features(ev, wx, cfg["airports"], cfg)
+    feats.to_parquet(out, index=False)
+    feats.head(5).to_csv(out.with_name("event_features_sample5.csv"), index=False)
 
-    m = cfg["meteostat"]
-    to_fetch = airports if args.weather_scope == "all" else airports[airports.icao.isin(hubs)]
-    raw = fetch_all(to_fetch, m["weather_start"], m["weather_end"])
-    print(f"weather: {sum(v is not None for v in raw.values())}/{len(airports)} airports have data")
-    wx = weather_table(airports, raw, cfg)
-    wx.to_parquet(INTERIM / "weather_features.parquet", index=False)  # used by tests/test_leakage.py
-
-    hourly = build_hourly(flights, hubs, wx, cfg)
-    hourly.to_parquet(PROCESSED / "hourly_features.parquet", index=False)
-    flight = build_flight(flights, wx, cfg)
-    flight.to_parquet(PROCESSED / "flight_features.parquet", index=False)
-    meta = {"validation": val, "weather_scope": args.weather_scope, "hubs": list(hubs),
-            "hourly_shape": hourly.shape, "flight_shape": flight.shape}
-    (PROCESSED / "build_meta.json").write_text(json.dumps(meta, indent=1, default=str))
-    print("hourly", hourly.shape, "flight", flight.shape)
+    meta = {"stats": stats, "hubs": list(hubs), "rows": len(feats), "cols": feats.shape[1],
+            "weather_file": wx_path, "weather_coverage": round(float(feats.temp.notna().mean()), 4)}
+    (out.parent / "build_meta.json").write_text(json.dumps(meta, indent=1, default=str))
+    print(json.dumps(meta, default=str))
 
 
 if __name__ == "__main__":
