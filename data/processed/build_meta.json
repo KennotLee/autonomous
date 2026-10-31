@@ -16,7 +16,7 @@
    24876
   ]
  },
- "weather_scope": "hubs",
+ "weather_scope": "all",
  "hubs": [
   "KATL",
   "KDFW"

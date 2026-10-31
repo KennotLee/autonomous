@@ -48,7 +48,7 @@ X = hr[hr.h == 6]   # pick ONE horizon per model; never train on oracle_* column
 Rebuild: `.venv/bin/python scripts/run_pipeline.py --icao KATL KDFW --start 2023-01-01 --end 2025-07-31 [--weather-scope all]`
 then `.venv/bin/python tests/test_leakage.py` (must print ALL LEAKAGE CHECKS PASSED). All timestamps are tz-aware UTC.
 
-## Output schemas (v1, 2026-10-31; branch p1)
+## Output schemas (v1.1, 2026-10-31; branch p1)
 Weather feature block `<F>` (from Meteostat, last obs hour ≤ t − h, tolerance 2 h; units in name):
 - base: temp_c, dwpt_c, rhum_pct, prcp_mm (1-h total), wdir_deg (from, true), wspd_kt, wpgt_kt (98% NaN), pres_hpa (sea level), coco (1–27, model-filled)
 - rolling, window (T−w, T] at obs time T, w ∈ {3,6}: wspd_max_{w}h_kt, wpgt_max_{w}h_kt, prcp_sum_{w}h_mm, pres_chg_{w}h_hpa (= pres(T) − pres(T−w))
@@ -81,7 +81,7 @@ Weather feature block `<F>` (from Meteostat, last obs hour ≤ t − h, toleranc
 | feature_obs_time | max(origin_, dest_feature_obs_time), all ≤ t − h |
 | carrier, distance_mi, crs_elapsed_min | schedule info (allowed) |
 | dep_hour_local, dow_local, month_local (origin tz), arr_hour_local (dest tz), dep_hour_utc | calendar (allowed) |
-| origin_`<F>`, dest_`<F>` | weather features; **v1: only hub ends have weather** (non-hub side NaN until `--weather-scope all`) |
+| origin_`<F>`, dest_`<F>` | weather features at both ends (v1.1, `--weather-scope all`): non-null origin 99.95%, dest 99.7%; runway components only at hub ends |
 | delay_min | **target**: ARR_DELAY minutes (signed); NaN if cancelled/diverted |
 | label_45 | **target**: delay_min > 45 (1/0), NaN if cancelled/diverted; base rate 10.7% |
 | cancelled, diverted | 0/1 outcomes (not features) |
