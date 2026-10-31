@@ -61,7 +61,8 @@ def rule_score(df, c, t):
 
 
 def scores(y, p, thr):
-    out = {"n": len(y), "pos_rate": y.mean(), "pr_auc": average_precision_score(y, p),
+    out = {"n": len(y), "pos_rate": y.mean(),
+           "pr_auc": average_precision_score(y, p) if 0 < y.sum() < len(y) else np.nan,  # undefined w/o both classes
            "brier": brier_score_loss(y, np.clip(p, 0, 1))}
     if thr is None:  # constant predictor: no alert decision
         return out | {"precision": np.nan, "recall": np.nan, "alert_rate": np.nan}
@@ -71,7 +72,24 @@ def scores(y, p, thr):
                   "alert_rate": flag.mean()}
 
 
-CI_SINGLE = ["gbm", "base_rate", "rule", "no_weather", "true_oracle", "p1_oracle"]
+HEAVY_RAIN_MM = 2.5
+
+
+def weather_slices(te: pd.DataFrame, tr: pd.DataFrame) -> list[tuple]:
+    """Bad-weather subsets, defined at feature time (what the model saw) and at the event
+    hour (true oracle). Strong crosswind = top 5% of train crosswind (cut-off from train only)."""
+    cw = float(np.nanquantile(tr.crosswind, 0.95))
+    out = []
+    for kind, pre in (("wx_feature_time", ""), ("wx_event_hour", "true_oracle_")):
+        out += [(kind, "thunderstorm", te[te[f"{pre}ts_flag"] == 1]),
+                (kind, f"heavy_rain_ge_{HEAVY_RAIN_MM}mm", te[te[f"{pre}prcp"] >= HEAVY_RAIN_MM]),
+                (kind, f"crosswind_ge_{cw:.1f}kmh_top5pct_train", te[te[f"{pre}crosswind"] >= cw]),
+                (kind, "none_of_these", te[(te[f"{pre}ts_flag"] != 1) & ~(te[f"{pre}prcp"] >= HEAVY_RAIN_MM)
+                                            & ~(te[f"{pre}crosswind"] >= cw)])]
+    return out
+
+
+CI_SINGLE =["gbm", "base_rate", "rule", "no_weather", "true_oracle", "p1_oracle"]
 CI_DIFF = [("gbm", "base_rate"), ("gbm", "rule"), ("gbm", "no_weather"), ("true_oracle", "gbm"), ("p1_oracle", "gbm")]
 
 
@@ -122,6 +140,7 @@ def main():
     # ---- metrics.csv: overall and per h / airport / event_type
     rows = []
     slices = [("all", "all", te)] + [(k, v, g) for k in ("h", "airport", "event_type") for v, g in te.groupby(k)]
+    slices += weather_slices(te, tr)
     for kind, val, g in slices:
         for name in models:
             t = g[f"thr_{name}"].to_numpy() if f"thr_{name}" in g else None
