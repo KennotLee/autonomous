@@ -1,13 +1,14 @@
 """Which inputs actually help? Trains each variant on train and scores it on VALIDATION only
 (2025 test is untouched), then writes outputs/predictions/aar_ablation.csv.
 
-    python -m src.models.ablation_aar --data data/interim/hourly_features.parquet \
-                                      --flights data/interim/flight_features.parquet
+    python -m src.models.ablation_aar
 
-The "oracle" variant swaps in same-hour weather (oracle_* columns). It is a diagnostic upper
-bound on what perfect weather knowledge could add and is never used for the production model.
+The "oracle" variant swaps in the weather of the target hour itself (oracle_* columns). It is a
+diagnostic upper bound on what perfect weather knowledge could add and is never used for the
+production model.
 """
 import argparse
+import re
 from pathlib import Path
 
 import lightgbm as lgb
@@ -15,18 +16,14 @@ import numpy as np
 import pandas as pd
 
 from . import aar_config as cfg
-from .aar_baselines import HistoricalAverage
-from .aar_context import HUB_EXPOSURE_COLUMNS, ORIGIN_COLUMNS, SCHED_OFFSETS, add_context, load_flights, sched_offset_name, weather_flags
+from .aar_baselines import HistoricalAverage, ScheduleBaseline
+from .aar_context import BAD_CROSSWIND_KMH, HUB_EXPOSURE_COLUMNS, add_context, weather_flags
 from .aar_data import load_airport_timezones, load_hourly, split_chronological
 from .aar_features import AARPreprocessor
 
-DEFAULT_FLIGHTS = cfg.HOURLY_FEATURES.with_name("flight_features.parquet")
-
 
 def hub_weather_columns(df: pd.DataFrame) -> list[str]:
-    oracle_bases = {c.removeprefix("oracle_") for c in df.columns if c.startswith("oracle_")}
-    rolling = [c for c in df.columns if c.startswith(("wspd_max_", "wpgt_max_", "prcp_sum_", "pres_chg_"))]
-    return sorted((oracle_bases & set(df.columns)) | set(rolling))
+    return [c for c in df.columns if c in cfg.WEATHER_OBS_COLUMNS or re.fullmatch(cfg.WEATHER_OBS_PATTERN, c)]
 
 
 def score(train, val, timezones, params, wx: set[str], bad: pd.Series, severe: pd.Series) -> dict:
@@ -49,60 +46,56 @@ def score(train, val, timezones, params, wx: set[str], bad: pd.Series, severe: p
     }
 
 
-def run(data_path: Path, flights_path: Path, out_dir: Path = cfg.PRED_DIR) -> pd.DataFrame:
+def baseline_row(name, pred, val, bad, severe) -> dict:
+    err = pred - val[cfg.TARGET]
+    return {"variant": name, "rmse": float(np.sqrt((err**2).mean())), "mae": float(err.abs().mean()),
+            "rmse_bad_weather_hours": float(np.sqrt((err[bad] ** 2).mean())),
+            "rmse_severe_weather_hours": float(np.sqrt((err[severe] ** 2).mean()))}
+
+
+def run(data_path: Path = cfg.PANEL, out_dir: Path = cfg.PRED_DIR) -> pd.DataFrame:
     timezones = load_airport_timezones()
     panel = load_hourly(data_path)
-    flights = load_flights(flights_path)
-    if flights is None:
-        raise FileNotFoundError(f"{flights_path} not found; origin-weather variants need it")
-    full = add_context(panel.dropna(subset=[cfg.TARGET]), panel, flights)
+    full = add_context(panel.dropna(subset=[cfg.TARGET]), panel)
     s = split_chronological(full)
     train, val = s["train"], s["val"]
 
     hub_wx = hub_weather_columns(full)
-    sched_ctx = [sched_offset_name(k) for k in SCHED_OFFSETS]
-    old_origin = ORIGIN_COLUMNS[:7]  # origin aggregates as first tested (variants E, F)
-    new_wx = HUB_EXPOSURE_COLUMNS + ORIGIN_COLUMNS
-    oracle = {f"oracle_{c}": c for c in hub_wx if f"oracle_{c}" in full}
+    ops = [c for c in full.columns if c.startswith("p2_ops_arr_")]
+    oracle = {f"oracle_{c}": c for c in cfg.WEATHER_COLUMNS if f"oracle_{c}" in full}
+    wx = set(hub_wx) | set(HUB_EXPOSURE_COLUMNS)
     l2 = {**cfg.LGBM_PARAMS, "objective": "regression"}
     poisson = {**cfg.LGBM_PARAMS, "objective": "poisson"}
-    wx = set(hub_wx) | set(new_wx)
-    # Hours with actually bad weather at the hub (same-hour oracle values; used only to pick rows to score).
-    bad = ((val.get("oracle_prcp_mm", 0) >= 1) | (val.get("oracle_coco", 0) >= 7)
-           | (val.get("oracle_wspd_kt", 0) >= 20) | (val.get("oracle_crosswind_kt", 0) >= 15))
-    severe = weather_flags(val["oracle_coco"], val["oracle_prcp_mm"], val["oracle_wspd_kt"])[1].astype(bool)
+    # Hours with actually bad weather at the hub (target-hour oracle values; used only to pick rows to score).
+    bad_f, severe_f, _ = weather_flags(val["oracle_condition_code"], val["oracle_precip_mm"], val["oracle_wind_speed_kmh"])
+    bad = (bad_f == 1) | (val["oracle_crosswind_kmh"] >= BAD_CROSSWIND_KMH)
+    severe = severe_f == 1
 
     def drop(cols):
         return lambda d: d.drop(columns=cols)
 
     def with_oracle(d):
-        d = d.drop(columns=[c for c in hub_wx if c not in oracle.values()] + new_wx)
+        # Weather of hour t in place of t - h weather; rolling windows and exposure flags removed.
+        d = d.drop(columns=[c for c in hub_wx if c not in oracle.values()] + HUB_EXPOSURE_COLUMNS)
         return d.drop(columns=list(oracle.values())).rename(columns=oracle)
 
     variants = [
-        ("A v1 (hub weather + schedule t)", drop(sched_ctx + new_wx), l2),
-        ("B no weather at all", drop(hub_wx + sched_ctx + new_wx), l2),
-        ("C + schedule t-2..t+2", drop(new_wx), l2),
-        ("D C without weather", drop(hub_wx + new_wx), l2),
-        ("D2 C with poisson objective (v2)", drop(new_wx), poisson),
-        ("E C + origin-airport weather maxima", drop(HUB_EXPOSURE_COLUMNS + ORIGIN_COLUMNS[7:]), l2),
-        ("F E with poisson objective", drop(HUB_EXPOSURE_COLUMNS + ORIGIN_COLUMNS[7:]), poisson),
-        ("G oracle: C with same-hour hub weather (diagnostic)", with_oracle, l2),
-        ("H D2 + hub weather exposure", drop(ORIGIN_COLUMNS), poisson),
-        ("I D2 + hub + origin weather exposure (all weather)", lambda d: d, poisson),
-        ("J I without raw hub weather (exposure features only)", drop(hub_wx), poisson),
+        ("A schedule + calendar only", drop(hub_wx + HUB_EXPOSURE_COLUMNS + ops), poisson),
+        ("B A + hub weather at t-h", drop(HUB_EXPOSURE_COLUMNS + ops), poisson),
+        ("C B + weather exposure", drop(ops), poisson),
+        ("D C + recent arrivals (all inputs, production)", lambda d: d, poisson),
+        ("E D without any weather", drop(hub_wx + HUB_EXPOSURE_COLUMNS), poisson),
+        ("F D with L2 objective", lambda d: d, l2),
+        ("G oracle: D with weather of hour t itself (diagnostic)", with_oracle, poisson),
     ]
-    hist = HistoricalAverage(timezones).fit(train)
-    hist_err = hist.predict(val) - val[cfg.TARGET]
-    rows = [{"variant": "baseline: historical average", "rmse": float(np.sqrt((hist_err**2).mean())),
-             "mae": float(hist_err.abs().mean()), "rmse_bad_weather_hours": float(np.sqrt((hist_err[bad]**2).mean())),
-             "rmse_severe_weather_hours": float(np.sqrt((hist_err[severe]**2).mean()))}]
+    rows = [baseline_row("baseline: schedule x completion ratio", ScheduleBaseline().fit(train).predict(val), val, bad, severe),
+            baseline_row("baseline: hour x weekday mean", HistoricalAverage(timezones).fit(train).predict(val), val, bad, severe)]
     for name, transform, params in variants:
-        print(f"running {name} ...")
+        print(f"running {name} ...", flush=True)
         rows.append({"variant": name, **score(transform(train), transform(val), timezones, params, wx, bad, severe)})
 
     table = pd.DataFrame(rows)
-    print(f"bad-weather validation rows: {int(bad.sum())}, severe: {int(severe.sum())}, of {len(val)}")
+    print(f"validation rows: {len(val)}; bad-weather {int(bad.sum())}, severe {int(severe.sum())}")
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     table.to_csv(Path(out_dir) / "aar_ablation.csv", index=False)
     print(table.round(4).to_string(index=False))
@@ -111,11 +104,10 @@ def run(data_path: Path, flights_path: Path, out_dir: Path = cfg.PRED_DIR) -> pd
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data", type=Path, default=cfg.HOURLY_FEATURES)
-    ap.add_argument("--flights", type=Path, default=DEFAULT_FLIGHTS)
+    ap.add_argument("--data", type=Path, default=cfg.PANEL)
     ap.add_argument("--out-dir", type=Path, default=cfg.PRED_DIR)
     args = ap.parse_args()
-    run(args.data, args.flights, args.out_dir)
+    run(args.data, args.out_dir)
 
 
 if __name__ == "__main__":
