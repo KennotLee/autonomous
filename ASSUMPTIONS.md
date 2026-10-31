@@ -91,3 +91,11 @@ CLAUDE.md lines 3–9) or *ours* (team decision). "Impact if wrong" is our estim
 23. **Year-to-year shift:** the positive rate is 10.1% in train, 9.6% in validation and 13.2% in test (2025); cancellations rise from 1.1% to 2.1%.
     - Given by: data (P1 check).
     - Impact: probabilities may under-predict in 2025 (see `outputs/metrics/calibration.png`).
+
+## 🧠 AI use
+
+24. **No LLM at runtime.** Risk scores come from LightGBM, recommendations from explicit rules, and per-flight reasons from LightGBM
+    feature contributions (`src/models/delay/train.py` `top_drivers`; dashboard rules in `app/app.py` `recommendations`).
+    - **Development:** code and docs were written with AI coding assistance (Claude Code), visible as `Co-Authored-By` lines
+      in the git history. Explanatory text (README, failure-case write-ups, dashboard notes) was AI-drafted and reviewed by the team.
+    - Given by: ours. Rubric: "Any LLM use is explanation-only and labelled."

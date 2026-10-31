@@ -53,6 +53,9 @@ Put the organiser files (`Flight_Data_With_Weather_Final.csv`, `challenge5_hourl
 `SOURCES.md`: every data source with links and licences (credit **Meteostat**, CC BY 4.0, in the demo).
 `ASSUMPTIONS.md`: every assumption with file:line.
 
+**AI use:** no LLM at runtime (risk = LightGBM, recommendations = explicit rules, reasons = LightGBM feature
+contributions). Built with AI coding assistance (Claude Code); explanatory text was AI-drafted and reviewed by the team.
+
 ## 🗂️ Layout
 
 ```
