@@ -37,7 +37,9 @@ Put the organiser files (`Flight_Data_With_Weather_Final.csv`, `challenge5_hourl
 ## 📈 Results (2025 test)
 
 - **Delay model:** PR-AUC 0.219 vs base rate 0.132 (~1.7× better than guessing); alert thresholds per airport (KATL 0.098, KDFW 0.123).
-- **Arrivals model (P2-reported):** RMSE KATL 6.86, KDFW 8.96 arrivals/hour, 20.9% and 16.1% better than the best baseline.
+- **Arrivals model (optional):** RMSE KATL 6.86, KDFW 8.96 arrivals/hour. Only **3.5% / 7.0% better than the strongest
+  (schedule-spread) baseline** at h = 3 (1–7% across horizons), but **4–13% in bad-weather and 8–27% in severe-weather hours**,
+  where it matters (`outputs/metrics/aar_bts_model_vs_baseline.csv`). Vs simpler baselines: 20.9% / 16.1%.
 
 ## ⚠️ Limitations
 
