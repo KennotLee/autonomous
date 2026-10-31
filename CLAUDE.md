@@ -66,7 +66,7 @@ Weather feature block `<F>` (from Meteostat, last obs hour ≤ t − h, toleranc
 | hour_local, dow_local (0=Mon), month_local, hour_utc | calendar of t (allowed) |
 | sched_arr_count | flights scheduled to arrive in hour t (incl. cancelled) — schedule, known in advance |
 | arr_count | **target**: landed (not cancelled/diverted) by floor(wheels_on_utc) |
-| mean_arr_delay, share_delayed_45, cancellations | outcomes by scheduled-arrival hour (targets/eval only, NOT features) |
+| mean_arr_delay, share_delayed_45, cancellations, diversions | outcomes by scheduled-arrival hour (targets/eval only, NOT features) |
 | capacity_ratio | arr_count / sched_arr_count, NaN if 0 (target/eval only) |
 | oracle_`<base + components>` | weather stamped exactly at t — oracle comparison only |
 

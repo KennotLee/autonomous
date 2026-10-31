@@ -70,8 +70,9 @@ def build_hourly(flights: pd.DataFrame, hubs: dict, wx: pd.DataFrame, cfg: dict)
         t["arr_count"] = landed.groupby(landed.wheels_on_utc.dt.floor("h")).size()
         t["sched_arr_count"] = g_s.size()
         t["cancellations"] = g_s.cancelled.sum()
-        t[["arr_count", "sched_arr_count", "cancellations"]] = t[["arr_count", "sched_arr_count",
-                                                                   "cancellations"]].fillna(0).astype(int)
+        t["diversions"] = g_s.diverted.sum()  # by scheduled arrival hour, like cancellations
+        cnt = ["arr_count", "sched_arr_count", "cancellations", "diversions"]
+        t[cnt] = t[cnt].fillna(0).astype(int)
         t["mean_arr_delay"] = g_s.delay_min.mean()
         t["share_delayed_45"] = g_s.label_45.mean()
         t["capacity_ratio"] = t.arr_count / t.sched_arr_count.replace(0, np.nan)
@@ -91,7 +92,8 @@ def build_hourly(flights: pd.DataFrame, hubs: dict, wx: pd.DataFrame, cfg: dict)
     orc = orc.rename(columns={c: f"oracle_{c}" for c in ORACLE_SRC})
     p = p.merge(feats, on="row_id").merge(orc, on="row_id")
     cal_cols = ["hour_local", "dow_local", "month_local", "hour_utc"]
-    tgt = ["sched_arr_count", "arr_count", "mean_arr_delay", "share_delayed_45", "cancellations", "capacity_ratio"]
+    tgt = ["sched_arr_count", "arr_count", "mean_arr_delay", "share_delayed_45", "cancellations", "diversions",
+           "capacity_ratio"]
     order = (["icao", "target_hour_utc", "h", "feature_obs_time"] + fcols + cal_cols + tgt
              + [f"oracle_{c}" for c in ORACLE_SRC])
     return p[order].sort_values(["icao", "target_hour_utc", "h"]).reset_index(drop=True)
