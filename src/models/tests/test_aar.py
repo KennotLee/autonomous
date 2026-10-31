@@ -31,8 +31,8 @@ def make_panel(start="2024-05-01", end="2025-02-15", seed=0) -> pd.DataFrame:
                 cfg.TIME: hours,
                 "h": h,
                 cfg.OBS_TIME: hours - pd.Timedelta(hours=h),
-                "wspd_obs": wind + rng.normal(0, 2, len(hours)),
-                "crosswind_obs": rng.normal(0, 5, len(hours)),
+                "wspd_kt": wind + rng.normal(0, 2, len(hours)),
+                "crosswind_kt": rng.normal(0, 5, len(hours)),
                 "sched_arr_count": sched,
                 cfg.TARGET: arr,
                 # Leaky columns that must never become features:
@@ -80,7 +80,7 @@ def test_leaky_columns_never_features(panel):
     for col in cfg.EXCLUDED_COLUMNS | {"oracle_wspd", "oracle_arr_hint", cfg.TIME, cfg.OBS_TIME}:
         assert col not in features
         assert col in dropped
-    assert {"icao", "h", "wspd_obs", "crosswind_obs", "sched_arr_count"} <= set(features)
+    assert {"icao", "h", "wspd_kt", "crosswind_kt", "sched_arr_count"} <= set(features)
 
 
 def test_preprocessor_roundtrip_and_unseen_airport(panel, tmp_path):
@@ -91,7 +91,7 @@ def test_preprocessor_roundtrip_and_unseen_airport(panel, tmp_path):
     assert list(X.columns) == pre.feature_columns
     assert not any(c.startswith("oracle_") or c in cfg.EXCLUDED_COLUMNS for c in X.columns)
     with pytest.raises(KeyError):
-        loaded.transform(panel.head(2).drop(columns=["wspd_obs"]))
+        loaded.transform(panel.head(2).drop(columns=["wspd_kt"]))
 
 
 def test_split_is_chronological(panel):
@@ -153,21 +153,68 @@ def test_end_to_end_train_and_predict(panel, tmp_path):
     data = tmp_path / "hourly_features.parquet"
     panel.to_parquet(data)
     metrics = run(data, tmp_path)
-    for f in ("aar_preds.csv", "aar_metrics.csv", "aar_model/model.txt",
+    for f in ("aar_preds.csv", "aar_metrics.csv", "aar_metrics_table.md", "aar_model/model.txt",
+              "aar_model/model_p10.txt", "aar_model/model_p90.txt",
               "aar_model/preprocessor.json", "aar_model/metadata.json"):
         assert (tmp_path / f).exists()
     test_rows = metrics[(metrics.split == "test") & (metrics.icao != "ALL")]
     assert set(test_rows.icao) == {"KATL", "KDFW"}
-    assert {"lightgbm", "persistence", "hist_avg"} <= set(test_rows.model)
+    assert {"lightgbm", "schedule", "persistence", "hist_avg"} <= set(test_rows.model)
+    assert test_rows[test_rows.model == "lightgbm"].coverage_p10_p90.notna().all()
+
+    # Contract columns come first, in the agreed order.
+    csv = pd.read_csv(tmp_path / "aar_preds.csv")
+    assert list(csv.columns[:6]) == cfg.PREDS_COLUMNS
+    assert ((csv.p10 <= csv.pred_arr_count + 1e-9) & (csv.pred_arr_count <= csv.p90 + 1e-9) & (csv.p10 >= 0)).all()
 
     out = predict_aar(icao="KDFW", h=[3, 12], start="2025-01-01", model_dir=tmp_path / "aar_model", data_path=data)
-    assert list(out.columns) == ["icao", cfg.TIME, "h", "aar_pred"]
+    assert list(out.columns) == cfg.PREDS_COLUMNS
     assert set(out.icao) == {"KDFW"} and set(out.h) == {3, 12}
-    assert (out.aar_pred >= 0).all()
-    # Predictions must not move when leaky/oracle columns are scrambled.
-    scrambled = panel.assign(oracle_arr_hint=0, capacity_ratio=0, **{cfg.TARGET: 0})
+    assert (out.pred_arr_count >= 0).all()
+    # Purely predictive: scrambling everything not known at t - h (target, outcomes, oracle weather)
+    # must leave the point forecast and the interval unchanged.
+    future = [cfg.TARGET, "capacity_ratio", "mean_arr_delay", "share_delayed_45", "cancellations",
+              "diversions"] + [c for c in panel.columns if c.startswith("oracle_")]
+    scrambled = panel.assign(**{c: -7 for c in future})
     out2 = predict_aar(scrambled, icao="KDFW", h=[3, 12], start="2025-01-01", model_dir=tmp_path / "aar_model")
-    np.testing.assert_allclose(out.aar_pred, out2.aar_pred)
+    pd.testing.assert_frame_equal(out, out2)
+
+
+def test_unknown_input_column_fails_closed(panel):
+    with pytest.raises(ValueError, match="no known availability"):
+        select_feature_columns(panel.assign(mystery_feature=1.0))
+
+
+def test_final_model_never_fits_on_test_period(panel, tmp_path, monkeypatch):
+    """Every row handed to LightGBM for fitting must be before 2025."""
+    import lightgbm as lgb
+    from src.models import train_aar
+
+    seen = []
+    real = lgb.Dataset
+
+    def spy(data, label=None, **kw):
+        if kw.get("reference") is None:  # training sets only, not validation sets
+            seen.append(len(data))
+        return real(data, label, **kw)
+
+    monkeypatch.setattr(train_aar.lgb, "Dataset", spy)
+    data = tmp_path / "hourly_features.parquet"
+    panel.to_parquet(data)
+    train_aar.run(data, tmp_path)
+    s = split_chronological(panel)
+    assert max(seen) == len(s["train"]) + len(s["val"]) and len(s["test"]) > 0
+
+
+def test_schedule_baseline_ratio_from_training_only(panel):
+    from src.models.aar_baselines import ScheduleBaseline
+    s = split_chronological(panel)
+    b = ScheduleBaseline().fit(s["train"])
+    before = b.ratio.copy()
+    ScheduleBaseline().fit(s["train"])  # refit identical
+    tampered = pd.concat([s["train"], s["test"].assign(**{cfg.TARGET: 99})])
+    assert not np.allclose(ScheduleBaseline().fit(tampered).ratio, before)  # would change if test leaked in
+    pd.testing.assert_series_equal(b.ratio, before)
 
 
 def test_schedule_context_reads_neighbouring_schedule_only(panel):

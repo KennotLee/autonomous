@@ -62,3 +62,22 @@ class HistoricalAverage:
             idx = pd.MultiIndex.from_frame(df[keys]) if len(keys) > 1 else pd.Index(df[keys[0]])
             pred = pred.fillna(pd.Series(table.reindex(idx).to_numpy(), index=df.index))
         return pred
+
+
+class ScheduleBaseline:
+    """sched_arr_count x (arrivals / scheduled) per airport, ratio fit on training rows only.
+
+    The strongest simple baseline: "the schedule, minus the usual share of cancelled/diverted flights".
+    """
+
+    def __init__(self):
+        self.ratio: pd.Series | None = None
+
+    def fit(self, train: pd.DataFrame) -> "ScheduleBaseline":
+        hourly = train.dropna(subset=[cfg.TARGET]).drop_duplicates(["icao", cfg.TIME])
+        g = hourly.groupby("icao")
+        self.ratio = g[cfg.TARGET].sum() / g["sched_arr_count"].sum()
+        return self
+
+    def predict(self, df: pd.DataFrame) -> pd.Series:
+        return df["sched_arr_count"] * df["icao"].map(self.ratio)

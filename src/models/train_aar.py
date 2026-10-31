@@ -3,8 +3,10 @@
     python -m src.models.train_aar                  # validate, train, evaluate, save
     python -m src.models.train_aar --validate-only  # schema/leakage checks only
 
-Flow: validate -> chronological split -> baselines -> LightGBM with early stopping on val ->
-refit on train+val with the best iteration count -> score 2025 test -> save artifacts.
+Target: realised arrivals per airport per UTC hour (arr_count), an AAR PROXY, not runway capacity.
+Flow: validate -> chronological split -> baselines -> LightGBM point model + p10/p90 quantile models,
+each early-stopped on 2024 H2 validation -> refit on all of 2023-24 with those iteration counts ->
+score 2025 test once -> save artifacts.
 """
 import argparse
 import json
@@ -15,41 +17,41 @@ import numpy as np
 import pandas as pd
 
 from . import aar_config as cfg
-from .aar_baselines import HistoricalAverage, persistence
+from .aar_baselines import HistoricalAverage, ScheduleBaseline, persistence
 from .aar_context import BAD_CROSSWIND_KT, add_context, weather_flags
 from .aar_data import check, load_airport_timezones, load_hourly, split_chronological, validate_hourly
 from .aar_features import AARPreprocessor
 from .aar_metrics import evaluate
 
-MODEL_COLS = {"lightgbm": "pred_lgbm", "persistence": "pred_persistence", "hist_avg": "pred_hist_avg"}
+MODEL_COLS = {"lightgbm": cfg.PRED_COL, "schedule": "pred_schedule", "persistence": "pred_persistence",
+              "hist_avg": "pred_hist_avg"}
+BASELINE_LABELS = {"schedule": "schedule x completion ratio", "hist_avg": "hour-of-day x day-of-week mean",
+                   "persistence": "persistence (last completed hour before t − h)"}
+WEATHER_COL = "eval_hub_weather_actual"
 
 
-def _fit_lgbm(train: pd.DataFrame, timezones, val: pd.DataFrame | None = None, num_rounds: int | None = None):
-    pre = AARPreprocessor(timezones).fit(train)
+def model_params(alpha: float | None = None) -> dict:
+    if alpha is None:
+        return cfg.LGBM_PARAMS
+    return {**cfg.LGBM_PARAMS, "objective": "quantile", "alpha": alpha, "metric": "quantile"}
+
+
+def _fit(train, pre, params, val=None, num_rounds=None) -> lgb.Booster:
     dtrain = lgb.Dataset(pre.transform(train), train[cfg.TARGET], categorical_feature=cfg.CATEGORICAL)
     if val is None:
-        return lgb.train(cfg.LGBM_PARAMS, dtrain, num_boost_round=num_rounds), pre
+        return lgb.train(params, dtrain, num_boost_round=num_rounds)
     dval = lgb.Dataset(pre.transform(val), val[cfg.TARGET], reference=dtrain)
-    booster = lgb.train(
-        cfg.LGBM_PARAMS,
-        dtrain,
-        num_boost_round=cfg.NUM_BOOST_ROUND,
-        valid_sets=[dval],
-        valid_names=["val"],
-        callbacks=[lgb.early_stopping(cfg.EARLY_STOPPING_ROUNDS, verbose=False), lgb.log_evaluation(100)],
-    )
-    return booster, pre
+    return lgb.train(params, dtrain, num_boost_round=cfg.NUM_BOOST_ROUND, valid_sets=[dval], valid_names=["val"],
+                     callbacks=[lgb.early_stopping(cfg.EARLY_STOPPING_ROUNDS, verbose=False)])
 
 
-def _predict_frame(split_name, df, booster, pre, hist, panel) -> pd.DataFrame:
-    out = df[cfg.KEYS].copy()
-    out.insert(0, "split", split_name)
-    out["y_true"] = df[cfg.TARGET]
-    out["pred_lgbm"] = booster.predict(pre.transform(df)).clip(min=0)  # counts cannot be negative
-    out["pred_persistence"], _ = persistence(df, panel)
-    out["pred_hist_avg"] = hist.predict(df)
-    out["hub_weather_actual"] = actual_weather_category(df)
-    return out
+def predict_with_interval(models: dict[str, lgb.Booster], X: pd.DataFrame) -> pd.DataFrame:
+    """Point forecast and p10/p90, clipped at 0. Bounds are widened to contain the point forecast
+    (separately fitted quantile models can otherwise cross it)."""
+    point = models["point"].predict(X).clip(min=0)
+    p10 = np.minimum(models["p10"].predict(X), point).clip(min=0)
+    p90 = np.maximum(models["p90"].predict(X), point)
+    return pd.DataFrame({cfg.PRED_COL: point, "p10": p10, "p90": p90}, index=X.index)
 
 
 def actual_weather_category(df: pd.DataFrame) -> pd.Series:
@@ -67,6 +69,46 @@ def actual_weather_category(df: pd.DataFrame) -> pd.Series:
     return pd.Series(np.select([severe == 1, bad == 1], ["severe", "bad"], "normal"), index=df.index)
 
 
+def _predict_frame(split_name, df, models, pre, baselines, panel) -> pd.DataFrame:
+    """Contract columns first (cfg.PREDS_COLUMNS), then evaluation/analysis columns."""
+    out = df[cfg.KEYS].copy()
+    out = out.join(predict_with_interval(models, pre.transform(df)))
+    out["split"] = split_name
+    out[cfg.ACTUAL_COL] = df[cfg.TARGET]
+    out["pred_schedule"] = baselines["schedule"].predict(df)
+    out["pred_persistence"], _ = persistence(df, panel)
+    out["pred_hist_avg"] = baselines["hist_avg"].predict(df)
+    out[WEATHER_COL] = actual_weather_category(df)
+    return out
+
+
+def metrics_table(metrics: pd.DataFrame) -> str:
+    """Markdown: 2025 test RMSE by airport x horizon, model vs baselines, plus interval calibration."""
+    t = metrics[(metrics.split == "test") & (metrics.weather == "ALL") & (metrics.icao != "ALL") & (metrics.h != "ALL")]
+    rmse = t.pivot_table(index=["icao", "h"], columns="model", values="rmse")
+    lg = t[t.model == "lightgbm"].set_index(["icao", "h"])
+    lines = [
+        "# P2 AAR-proxy model vs baselines, 2025 test (generated by train_aar.py; do not edit)",
+        "",
+        "Target: realised arrivals per UTC hour (AAR proxy, not runway capacity). Model trained on 2023-24 only.",
+        "RMSE, lower is better. Interval = LightGBM quantile models (nominal p10-p90 coverage 0.80).",
+        "",
+        "| icao | h | LightGBM | schedule x ratio | hour x weekday mean | persistence | vs best baseline "
+        "| p10-p90 coverage | below p10 | above p90 | mean width |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for icao, h in sorted(rmse.index):
+        r = rmse.loc[(icao, h)]
+        best = min(r["schedule"], r["hist_avg"], r["persistence"])
+        i = lg.loc[(icao, h)]
+        lines.append(
+            f"| {icao} | {h} | **{r['lightgbm']:.3f}** | {r['schedule']:.3f} | {r['hist_avg']:.3f} | "
+            f"{r['persistence']:.3f} | {100 * (r['lightgbm'] / best - 1):+.1f}% | {i.coverage_p10_p90:.3f} | "
+            f"{i.share_below_p10:.3f} | {i.share_above_p90:.3f} | {i.mean_interval_width:.3f} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def run(data_path: Path = cfg.HOURLY_FEATURES, out_dir: Path = cfg.PRED_DIR, refit: bool = True) -> pd.DataFrame:
     timezones = load_airport_timezones()
     panel = load_hourly(data_path)
@@ -82,56 +124,69 @@ def run(data_path: Path = cfg.HOURLY_FEATURES, out_dir: Path = cfg.PRED_DIR, ref
     if not sizes["train"] or not sizes["val"]:
         raise ValueError(f"train and val must be non-empty, got {sizes}")
 
-    # Stage 1: fit on train, early-stop on val, score val.
-    booster, pre = _fit_lgbm(splits["train"], timezones, val=splits["val"])
-    best_iter = booster.best_iteration or cfg.NUM_BOOST_ROUND
-    hist = HistoricalAverage(timezones).fit(splits["train"])
-    frames = [_predict_frame("val", splits["val"], booster, pre, hist, panel)]
+    variants = {"point": None, **cfg.QUANTILES}
 
-    # Stage 2: refit on everything before 2025 with the chosen iteration count, score test.
+    # Stage 1: fit on train (2023-01 .. 2024-06), early-stop each model on val (2024-07 .. 2024-12).
+    pre = AARPreprocessor(timezones).fit(splits["train"])
+    models = {k: _fit(splits["train"], pre, model_params(a), val=splits["val"]) for k, a in variants.items()}
+    best_iter = {k: int(m.best_iteration or cfg.NUM_BOOST_ROUND) for k, m in models.items()}
+    print(f"best iterations: {best_iter}")
+    baselines = {"schedule": ScheduleBaseline().fit(splits["train"]),
+                 "hist_avg": HistoricalAverage(timezones).fit(splits["train"])}
+    frames = [_predict_frame("val", splits["val"], models, pre, baselines, panel)]
+
+    # Stage 2: refit on all of 2023-24 with the chosen iteration counts; 2025 is never seen in fitting.
     fit_df = pd.concat([splits["train"], splits["val"]]) if refit else splits["train"]
     if refit:
-        booster, pre = _fit_lgbm(fit_df, timezones, num_rounds=best_iter)
-        hist = HistoricalAverage(timezones).fit(fit_df)
+        pre = AARPreprocessor(timezones).fit(fit_df)
+        models = {k: _fit(fit_df, pre, model_params(a), num_rounds=best_iter[k]) for k, a in variants.items()}
+        baselines = {"schedule": ScheduleBaseline().fit(fit_df), "hist_avg": HistoricalAverage(timezones).fit(fit_df)}
+    assert fit_df[cfg.TIME].max() < cfg.TEST_START, "final model must not see test-period rows"
     if sizes["test"]:
-        frames.append(_predict_frame("test", splits["test"], booster, pre, hist, panel))
+        frames.append(_predict_frame("test", splits["test"], models, pre, baselines, panel))
     else:
         print("WARNING: no 2025 rows; test metrics not produced")
 
     preds = pd.concat(frames, ignore_index=True)
-    metrics = evaluate(preds, MODEL_COLS, weather_col="hub_weather_actual")
+    metrics = evaluate(preds, MODEL_COLS, y_col=cfg.ACTUAL_COL, weather_col=WEATHER_COL,
+                       intervals={"lightgbm": ("p10", "p90")})
 
     out_dir = Path(out_dir)
     model_dir = out_dir / cfg.MODEL_SUBDIR
     model_dir.mkdir(parents=True, exist_ok=True)
-    booster.save_model(str(model_dir / "model.txt"))
+    for k, m in models.items():
+        m.save_model(str(model_dir / ("model.txt" if k == "point" else f"model_{k}.txt")))
     pre.save(model_dir / "preprocessor.json")
     _, persistence_source = persistence(splits["val"].head(1), panel)
-    gain = booster.feature_importance("gain")
+    gain = models["point"].feature_importance("gain")
     metadata = {
-        "lgbm_params": cfg.LGBM_PARAMS,
-        "best_iteration": int(best_iter),
+        "target": "arr_count = realised arrivals per UTC hour; AAR proxy, not runway capacity",
+        "lgbm_params": {k: model_params(a) for k, a in variants.items()},
+        "best_iteration": best_iter,
         "refit_on_train_val": refit,
         "final_model_fit_rows": int(len(fit_df)),
         "final_model_fit_range": [fit_df[cfg.TIME].min().isoformat(), fit_df[cfg.TIME].max().isoformat()],
         "split": {"val_start": cfg.VAL_START.isoformat(), "test_start": cfg.TEST_START.isoformat(), "rows": sizes},
         "feature_columns": pre.feature_columns,
+        "feature_provenance": pre.to_dict()["provenance"],
         "dropped_columns": pre.dropped,
         "feature_importance_gain": dict(sorted(zip(pre.feature_columns, map(float, gain)), key=lambda kv: -kv[1])),
+        "baselines": BASELINE_LABELS,
+        "schedule_completion_ratio": {k: float(v) for k, v in baselines["schedule"].ratio.items()},
         "persistence_source": persistence_source,
         "validation_report": report,
     }
     (model_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, default=str), encoding="utf-8")
     preds.to_csv(out_dir / cfg.PREDS_FILE, index=False)
     metrics.to_csv(out_dir / cfg.METRICS_FILE, index=False)
+    if sizes["test"]:
+        (out_dir / cfg.METRICS_TABLE_FILE).write_text(metrics_table(metrics), encoding="utf-8")
 
     summary = metrics[(metrics.icao != "ALL") & (metrics.h == "ALL") & (metrics.weather == "ALL")]
-    print(summary.pivot_table(index=["split", "icao"], columns="model", values=["rmse", "mae"]).round(3))
-    wx = metrics[(metrics.split == "test") & (metrics.icao == "ALL") & (metrics.weather != "ALL")]
-    if len(wx):
-        print("test RMSE by actual hub weather:")
-        print(wx.pivot_table(index=["weather"], columns="model", values="rmse").round(3))
-    print(f"saved model to {model_dir}, predictions and metrics to {out_dir}")
+    print(summary.pivot_table(index=["split", "icao"], columns="model", values="rmse").round(3))
+    lg = summary[summary.model == "lightgbm"].set_index(["split", "icao"])
+    print(lg[["coverage_p10_p90", "share_below_p10", "share_above_p90", "mean_interval_width"]].round(3))
+    print(f"saved models to {model_dir}, predictions and metrics to {out_dir}")
     return metrics
 
 
@@ -140,7 +195,7 @@ def main() -> None:
     ap.add_argument("--data", type=Path, default=cfg.HOURLY_FEATURES)
     ap.add_argument("--out-dir", type=Path, default=cfg.PRED_DIR)
     ap.add_argument("--validate-only", action="store_true")
-    ap.add_argument("--no-refit", action="store_true", help="score test with the train-only model")
+    ap.add_argument("--no-refit", action="store_true", help="score test with the train-only models")
     args = ap.parse_args()
     if args.validate_only:
         report = validate_hourly(load_hourly(args.data), load_airport_timezones())

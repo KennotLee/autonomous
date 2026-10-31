@@ -39,6 +39,16 @@ EXCLUDED_PREFIXES = ("oracle_", "arr_count")
 SUSPICIOUS_TOKENS = ("delay", "cancel", "divert", "divers", "capacity")
 ALLOWED_OVERRIDES: set[str] = set()
 
+# Fail-closed input allowlist: every model input must belong to one of these "known at forecast
+# time" groups (see aar_features.provenance); anything else stops training. P1 weather block <F>
+# (CLAUDE.md "Output schemas v1.1"), all observed at feature_obs_time <= t - h:
+WEATHER_OBS_COLUMNS = {
+    "temp_c", "dwpt_c", "rhum_pct", "prcp_mm", "wdir_deg", "wspd_kt", "wpgt_kt", "pres_hpa", "coco",
+    "headwind_kt", "crosswind_kt", "tailwind_kt", "gust_headwind_kt", "gust_crosswind_kt", "gust_tailwind_kt",
+}
+WEATHER_OBS_PATTERN = r"(wspd_max|wpgt_max|prcp_sum|pres_chg)_\d+h_(kt|mm|hpa)"  # P1 rolling windows
+CALENDAR_COLUMNS = {"hour_local", "dow_local", "month_local", "hour_utc"}  # P1 calendar of t
+
 # Columns that are identifiers/timestamps, never features. icao and h ARE features.
 NON_FEATURE_COLUMNS = {TIME, OBS_TIME}
 CATEGORICAL = ["icao"]
@@ -64,3 +74,13 @@ LGBM_PARAMS = {
 }
 NUM_BOOST_ROUND = 2000
 EARLY_STOPPING_ROUNDS = 100
+
+# Prediction intervals: one LightGBM quantile model per bound, same inputs as the point model.
+QUANTILES = {"p10": 0.1, "p90": 0.9}
+
+# aar_preds.csv contract: team schema (CLAUDE.md "B. Prediction CSVs") + p10/p90 (P4 request).
+# pred_arr_count is an AAR PROXY: realised arrivals per UTC hour, not runway capacity.
+PRED_COL = "pred_arr_count"
+ACTUAL_COL = "actual_arr_count"
+PREDS_COLUMNS = ["icao", TIME, "h", PRED_COL, "p10", "p90"]
+METRICS_TABLE_FILE = "aar_metrics_table.md"

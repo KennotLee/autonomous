@@ -1,6 +1,7 @@
 """Model inputs for AAR regression: leakage-guarded column selection, calendar features,
 and a JSON-serialisable preprocessor shared by training and predict_aar()."""
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -57,7 +58,33 @@ def select_feature_columns(df: pd.DataFrame) -> tuple[list[str], dict[str, str]]
     for required in ("icao", "h"):
         if required not in features:
             raise ValueError(f"{required} must be a model input")
+    unknown = [c for c in features if provenance(c) is None]
+    if unknown:
+        raise ValueError(
+            f"inputs with no known availability at forecast time: {unknown}. Fail-closed: confirm with P1 "
+            "that each is observed at or before t - h (or known in advance), then add it to "
+            "aar_config.ALLOWED_OVERRIDES or the allowlists."
+        )
     return features, dropped
+
+
+def provenance(col: str) -> str | None:
+    """Why an input is known at forecast time t - h, or None if that is not established."""
+    if col in ("icao", "h"):
+        return "identifier (airport, horizon)"
+    if col in cfg.CALENDAR_COLUMNS or col in CALENDAR:
+        return "calendar of the target hour (known in advance)"
+    if col == "sched_arr_count" or re.fullmatch(r"p2_sched_[mp]\d", col):
+        return "published schedule (known in advance)"
+    if col in cfg.WEATHER_OBS_COLUMNS or re.fullmatch(cfg.WEATHER_OBS_PATTERN, col):
+        return "hub weather observed at feature_obs_time <= t - h"
+    if col.startswith(("p2_hub_", "p2_sched_x_", "p2_sched_m1_x_")):
+        return "derived from hub weather observed <= t - h and the schedule"
+    if col.startswith("p2_org_"):
+        return "origin-airport weather observed <= t - h"
+    if col in cfg.ALLOWED_OVERRIDES:
+        return "confirmed by P1 as observed <= t - h"
+    return None
 
 
 class AARPreprocessor:
@@ -93,6 +120,7 @@ class AARPreprocessor:
             "timezones": self.timezones,
             "feature_columns": self.feature_columns,
             "categories": self.categories,
+            "provenance": {c: provenance(c) for c in self.feature_columns},
             "dropped": self.dropped,
         }
 

@@ -1,26 +1,37 @@
-"""RMSE / MAE overall, per airport, per horizon and per airport x horizon."""
+"""RMSE / MAE overall, per airport, per horizon and per airport x horizon, plus p10-p90 interval scores."""
 import numpy as np
 import pandas as pd
 
 ALL = "ALL"
 
 
-def _scores(y: pd.Series, p: pd.Series) -> dict:
+def _scores(y: pd.Series, p: pd.Series, lo: pd.Series | None = None, hi: pd.Series | None = None) -> dict:
     ok = y.notna() & p.notna()
     err = (p[ok] - y[ok]).to_numpy()
     if not len(err):
         return {"n": 0, "rmse": np.nan, "mae": np.nan}
-    return {"n": int(len(err)), "rmse": float(np.sqrt(np.mean(err**2))), "mae": float(np.mean(np.abs(err)))}
+    out = {"n": int(len(err)), "rmse": float(np.sqrt(np.mean(err**2))), "mae": float(np.mean(np.abs(err)))}
+    if lo is not None and hi is not None:
+        yv, l, u = y[ok].to_numpy(), lo[ok].to_numpy(), hi[ok].to_numpy()
+        out.update({
+            "coverage_p10_p90": float(np.mean((yv >= l) & (yv <= u))),  # nominal 0.80
+            "share_below_p10": float(np.mean(yv < l)),                   # nominal <= 0.10
+            "share_above_p90": float(np.mean(yv > u)),                   # nominal <= 0.10
+            "mean_interval_width": float(np.mean(u - l)),
+        })
+    return out
 
 
 def evaluate(preds: pd.DataFrame, model_cols: dict[str, str], y_col: str = "y_true",
-             weather_col: str | None = None) -> pd.DataFrame:
-    """Long table: split, model, icao, h, weather, n, rmse, mae. "ALL" marks an aggregated level.
+             weather_col: str | None = None, intervals: dict[str, tuple[str, str]] | None = None) -> pd.DataFrame:
+    """Long table: split, model, icao, h, weather, n, rmse, mae (+ interval columns for models in
+    `intervals`). "ALL" marks an aggregated level.
 
     If weather_col is given, extra rows score each weather category per airport (h = ALL).
     Rows where a model has no prediction (e.g. persistence for an hour absent from the panel)
     are skipped for that model only, so compare n across models.
     """
+    intervals = intervals or {}
     rows = []
     for split, s in preds.groupby("split", sort=False):
         groupings = [
@@ -34,6 +45,7 @@ def evaluate(preds: pd.DataFrame, model_cols: dict[str, str], y_col: str = "y_tr
             groupings += [((icao, ALL, w), g) for (icao, w), g in s.groupby(["icao", weather_col])]
         for (icao, h, w), g in groupings:
             for model, col in model_cols.items():
+                lo, hi = (g[intervals[model][0]], g[intervals[model][1]]) if model in intervals else (None, None)
                 rows.append({"split": split, "model": model, "icao": icao, "h": h, "weather": w,
-                             **_scores(g[y_col], g[col])})
+                             **_scores(g[y_col], g[col], lo, hi)})
     return pd.DataFrame(rows)

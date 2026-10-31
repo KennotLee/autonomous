@@ -1,22 +1,59 @@
 {
+  "target": "arr_count = realised arrivals per UTC hour; AAR proxy, not runway capacity",
   "lgbm_params": {
-    "objective": "poisson",
-    "metric": [
-      "rmse",
-      "mae"
-    ],
-    "learning_rate": 0.05,
-    "num_leaves": 31,
-    "min_data_in_leaf": 20,
-    "feature_fraction": 0.9,
-    "bagging_fraction": 0.8,
-    "bagging_freq": 1,
-    "seed": 42,
-    "deterministic": true,
-    "force_col_wise": true,
-    "verbose": -1
+    "point": {
+      "objective": "poisson",
+      "metric": [
+        "rmse",
+        "mae"
+      ],
+      "learning_rate": 0.05,
+      "num_leaves": 31,
+      "min_data_in_leaf": 20,
+      "feature_fraction": 0.9,
+      "bagging_fraction": 0.8,
+      "bagging_freq": 1,
+      "seed": 42,
+      "deterministic": true,
+      "force_col_wise": true,
+      "verbose": -1
+    },
+    "p10": {
+      "objective": "quantile",
+      "metric": "quantile",
+      "learning_rate": 0.05,
+      "num_leaves": 31,
+      "min_data_in_leaf": 20,
+      "feature_fraction": 0.9,
+      "bagging_fraction": 0.8,
+      "bagging_freq": 1,
+      "seed": 42,
+      "deterministic": true,
+      "force_col_wise": true,
+      "verbose": -1,
+      "alpha": 0.1
+    },
+    "p90": {
+      "objective": "quantile",
+      "metric": "quantile",
+      "learning_rate": 0.05,
+      "num_leaves": 31,
+      "min_data_in_leaf": 20,
+      "feature_fraction": 0.9,
+      "bagging_fraction": 0.8,
+      "bagging_freq": 1,
+      "seed": 42,
+      "deterministic": true,
+      "force_col_wise": true,
+      "verbose": -1,
+      "alpha": 0.9
+    }
   },
-  "best_iteration": 458,
+  "best_iteration": {
+    "point": 458,
+    "p10": 1,
+    "p90": 404
+  },
   "refit_on_train_val": true,
   "final_model_fit_rows": 140308,
   "final_model_fit_range": [
@@ -78,6 +115,52 @@
     "p2_local_month",
     "p2_is_weekend"
   ],
+  "feature_provenance": {
+    "icao": "identifier (airport, horizon)",
+    "h": "identifier (airport, horizon)",
+    "temp_c": "hub weather observed at feature_obs_time <= t - h",
+    "dwpt_c": "hub weather observed at feature_obs_time <= t - h",
+    "rhum_pct": "hub weather observed at feature_obs_time <= t - h",
+    "prcp_mm": "hub weather observed at feature_obs_time <= t - h",
+    "wdir_deg": "hub weather observed at feature_obs_time <= t - h",
+    "wspd_kt": "hub weather observed at feature_obs_time <= t - h",
+    "wpgt_kt": "hub weather observed at feature_obs_time <= t - h",
+    "pres_hpa": "hub weather observed at feature_obs_time <= t - h",
+    "coco": "hub weather observed at feature_obs_time <= t - h",
+    "wspd_max_3h_kt": "hub weather observed at feature_obs_time <= t - h",
+    "wpgt_max_3h_kt": "hub weather observed at feature_obs_time <= t - h",
+    "prcp_sum_3h_mm": "hub weather observed at feature_obs_time <= t - h",
+    "pres_chg_3h_hpa": "hub weather observed at feature_obs_time <= t - h",
+    "wspd_max_6h_kt": "hub weather observed at feature_obs_time <= t - h",
+    "wpgt_max_6h_kt": "hub weather observed at feature_obs_time <= t - h",
+    "prcp_sum_6h_mm": "hub weather observed at feature_obs_time <= t - h",
+    "pres_chg_6h_hpa": "hub weather observed at feature_obs_time <= t - h",
+    "headwind_kt": "hub weather observed at feature_obs_time <= t - h",
+    "crosswind_kt": "hub weather observed at feature_obs_time <= t - h",
+    "tailwind_kt": "hub weather observed at feature_obs_time <= t - h",
+    "gust_headwind_kt": "hub weather observed at feature_obs_time <= t - h",
+    "gust_crosswind_kt": "hub weather observed at feature_obs_time <= t - h",
+    "gust_tailwind_kt": "hub weather observed at feature_obs_time <= t - h",
+    "hour_local": "calendar of the target hour (known in advance)",
+    "dow_local": "calendar of the target hour (known in advance)",
+    "month_local": "calendar of the target hour (known in advance)",
+    "hour_utc": "calendar of the target hour (known in advance)",
+    "sched_arr_count": "published schedule (known in advance)",
+    "p2_sched_m2": "published schedule (known in advance)",
+    "p2_sched_m1": "published schedule (known in advance)",
+    "p2_sched_p1": "published schedule (known in advance)",
+    "p2_sched_p2": "published schedule (known in advance)",
+    "p2_hub_bad": "derived from hub weather observed <= t - h and the schedule",
+    "p2_hub_severe": "derived from hub weather observed <= t - h and the schedule",
+    "p2_hub_winter": "derived from hub weather observed <= t - h and the schedule",
+    "p2_sched_x_hub_bad": "derived from hub weather observed <= t - h and the schedule",
+    "p2_sched_x_hub_severe": "derived from hub weather observed <= t - h and the schedule",
+    "p2_sched_m1_x_hub_bad": "derived from hub weather observed <= t - h and the schedule",
+    "p2_local_hour": "calendar of the target hour (known in advance)",
+    "p2_local_dow": "calendar of the target hour (known in advance)",
+    "p2_local_month": "calendar of the target hour (known in advance)",
+    "p2_is_weekend": "calendar of the target hour (known in advance)"
+  },
   "dropped_columns": {
     "target_hour_utc": "timestamp/identifier",
     "feature_obs_time": "timestamp/identifier",
@@ -148,6 +231,15 @@
     "gust_crosswind_kt": 0.0,
     "gust_tailwind_kt": 0.0,
     "p2_hub_severe": 0.0
+  },
+  "baselines": {
+    "schedule": "schedule x completion ratio",
+    "hist_avg": "hour-of-day x day-of-week mean",
+    "persistence": "persistence (last completed hour before t \u2212 h)"
+  },
+  "schedule_completion_ratio": {
+    "KATL": 0.9896009673518742,
+    "KDFW": 0.9763217645150827
   },
   "persistence_source": "derived: panel arr_count of last completed hour before t - h",
   "validation_report": {

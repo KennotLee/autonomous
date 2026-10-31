@@ -2,6 +2,8 @@
 
     from src.models.predict_aar import predict_aar
     preds = predict_aar(icao="KATL", h=6, start="2025-03-01", end="2025-03-08")
+
+pred_arr_count is an AAR PROXY (expected realised arrivals in the UTC hour), with a p10-p90 band.
 """
 from functools import lru_cache
 from pathlib import Path
@@ -13,8 +15,9 @@ from . import aar_config as cfg
 from .aar_context import add_context
 from .aar_data import load_hourly, normalise
 from .aar_features import AARPreprocessor
+from .train_aar import predict_with_interval
 
-OUTPUT_COLUMNS = ["icao", cfg.TIME, "h", "aar_pred"]
+OUTPUT_COLUMNS = cfg.PREDS_COLUMNS  # icao, target_hour_utc, h, pred_arr_count, p10, p90
 
 
 def _utc(t: str | pd.Timestamp) -> pd.Timestamp:
@@ -23,11 +26,14 @@ def _utc(t: str | pd.Timestamp) -> pd.Timestamp:
 
 
 @lru_cache(maxsize=4)
-def load_aar_model(model_dir: str = str(cfg.PRED_DIR / cfg.MODEL_SUBDIR)) -> tuple[lgb.Booster, AARPreprocessor]:
+def load_aar_model(model_dir: str = str(cfg.PRED_DIR / cfg.MODEL_SUBDIR)) -> tuple[dict[str, lgb.Booster], AARPreprocessor]:
     model_dir = Path(model_dir)
-    if not (model_dir / "model.txt").exists():
-        raise FileNotFoundError(f"no trained AAR model in {model_dir}; run python -m src.models.train_aar")
-    return lgb.Booster(model_file=str(model_dir / "model.txt")), AARPreprocessor.load(model_dir / "preprocessor.json")
+    files = {"point": "model.txt", **{k: f"model_{k}.txt" for k in cfg.QUANTILES}}
+    missing = [f for f in files.values() if not (model_dir / f).exists()]
+    if missing:
+        raise FileNotFoundError(f"missing {missing} in {model_dir}; run python -m src.models.train_aar")
+    models = {k: lgb.Booster(model_file=str(model_dir / f)) for k, f in files.items()}
+    return models, AARPreprocessor.load(model_dir / "preprocessor.json")
 
 
 def predict_aar(
@@ -40,14 +46,16 @@ def predict_aar(
     model_dir: Path | str = cfg.PRED_DIR / cfg.MODEL_SUBDIR,
     data_path: Path | str = cfg.HOURLY_FEATURES,
 ) -> pd.DataFrame:
-    """Predicted arrivals per hour (AAR proxy) for rows of the hourly feature panel.
+    """Predicted arrivals per hour (AAR proxy) with p10/p90, for rows of the hourly feature panel.
 
     features: rows shaped like hourly_features.parquet. If None, the parquet is loaded.
     icao / h / start / end: optional filters; start and end are inclusive UTC times on target_hour_utc.
-    Returns columns icao, target_hour_utc, h, aar_pred (arrivals/hour, >= 0), sorted by time.
+    Returns icao, target_hour_utc, h, pred_arr_count, p10, p90 (arrivals/hour, >= 0), sorted by time.
 
-    Neighbouring-hour schedule features are built from all rows before filtering, so pass
-    `features` covering at least 2 hours either side of the hours you want; missing ones become NaN.
+    Only inputs known at t - h are used (see preprocessor.json "provenance"); realised arrivals,
+    outcome and oracle_* columns in `features` are ignored. Neighbouring-hour schedule inputs are
+    built from all rows before filtering, so pass `features` covering at least 2 hours either side
+    of the hours you want; missing ones become NaN.
     """
     df = load_hourly(data_path) if features is None else normalise(features)
     df = add_context(df, df, flights=None)
@@ -62,7 +70,6 @@ def predict_aar(
     if df.empty:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
-    booster, pre = load_aar_model(str(model_dir))
-    out = df[["icao", cfg.TIME, "h"]].copy()
-    out["aar_pred"] = booster.predict(pre.transform(df)).clip(min=0)
-    return out.sort_values([cfg.TIME, "icao", "h"]).reset_index(drop=True)
+    models, pre = load_aar_model(str(model_dir))
+    out = df[["icao", cfg.TIME, "h"]].join(predict_with_interval(models, pre.transform(df)))
+    return out.sort_values([cfg.TIME, "icao", "h"]).reset_index(drop=True)[OUTPUT_COLUMNS]
