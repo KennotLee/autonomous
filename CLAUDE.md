@@ -38,6 +38,58 @@ Out of scope for P1: splits, models, baselines, metrics, dashboard.
   coco is only populated with model=True (model-filled). Meteostat does NOT give better gusts.
 - In the file, wpgt 0 in ~97.8% rows and snow 0 in 100% rows → NaNs filled with 0 upstream; treat as missing.
 
+## How to load (teammates)
+```python
+import pandas as pd
+hr = pd.read_parquet("data/processed/hourly_features.parquet")   # 181,048 rows = 2 icao × 22,631 h × 4 horizons
+fl = pd.read_parquet("data/processed/flight_features.parquet")   # 101,196 rows = 25,299 flights × 4 horizons
+X = hr[hr.h == 6]   # pick ONE horizon per model; never train on oracle_* columns or target columns
+```
+Rebuild: `.venv/bin/python scripts/run_pipeline.py --icao KATL KDFW --start 2023-01-01 --end 2025-07-31 [--weather-scope all]`
+then `.venv/bin/python tests/test_leakage.py` (must print ALL LEAKAGE CHECKS PASSED). All timestamps are tz-aware UTC.
+
+## Output schemas (v1, 2026-10-31; branch p1)
+Weather feature block `<F>` (from Meteostat, last obs hour ≤ t − h, tolerance 2 h; units in name):
+- base: temp_c, dwpt_c, rhum_pct, prcp_mm (1-h total), wdir_deg (from, true), wspd_kt, wpgt_kt (98% NaN), pres_hpa (sea level), coco (1–27, model-filled)
+- rolling, window (T−w, T] at obs time T, w ∈ {3,6}: wspd_max_{w}h_kt, wpgt_max_{w}h_kt, prcp_sum_{w}h_mm, pres_chg_{w}h_hpa (= pres(T) − pres(T−w))
+- runway components (only airports with runway_heading_deg in config, else NaN): headwind_kt, crosswind_kt, tailwind_kt,
+  gust_headwind_kt, gust_crosswind_kt, gust_tailwind_kt. θ = wdir − heading; head = s·cosθ; cross = |s·sinθ|; tail = max(0, −head); calm → 0.
+
+**hourly_features.parquet** (one row per icao × target_hour_utc × h)
+| column | meaning |
+|---|---|
+| icao | KATL / KDFW |
+| target_hour_utc | start of UTC hour t (grid covers full local days 2023-01-01..2025-07-31) |
+| h | horizon, hours ∈ {3,6,9,12} |
+| feature_obs_time | UTC stamp of the weather hour used (≤ t − h) |
+| `<F>` | weather features at icao |
+| hour_local, dow_local (0=Mon), month_local, hour_utc | calendar of t (allowed) |
+| sched_arr_count | flights scheduled to arrive in hour t (incl. cancelled) — schedule, known in advance |
+| arr_count | **target**: landed (not cancelled/diverted) by floor(wheels_on_utc) |
+| mean_arr_delay, share_delayed_45, cancellations | outcomes by scheduled-arrival hour (targets/eval only, NOT features) |
+| capacity_ratio | arr_count / sched_arr_count, NaN if 0 (target/eval only) |
+| oracle_`<base + components>` | weather stamped exactly at t — oracle comparison only |
+
+**flight_features.parquet** (one row per flight × h; flights with ORIGIN or DEST in hubs)
+| column | meaning |
+|---|---|
+| flight_id | `FL_DATE_<carrier><flnum>_<ORIGIN>_<DEST>` (unique) |
+| origin_icao, dest_icao | ICAO codes (K/P+IATA or config overrides) |
+| sched_time_utc | t = scheduled departure UTC |
+| sched_arr_utc | scheduled arrival UTC (= t + CRS_ELAPSED_TIME) |
+| h | horizon ∈ {3,6,9,12} |
+| feature_obs_time | max(origin_, dest_feature_obs_time), all ≤ t − h |
+| carrier, distance_mi, crs_elapsed_min | schedule info (allowed) |
+| dep_hour_local, dow_local, month_local (origin tz), arr_hour_local (dest tz), dep_hour_utc | calendar (allowed) |
+| origin_`<F>`, dest_`<F>` | weather features; **v1: only hub ends have weather** (non-hub side NaN until `--weather-scope all`) |
+| delay_min | **target**: ARR_DELAY minutes (signed); NaN if cancelled/diverted |
+| label_45 | **target**: delay_min > 45 (1/0), NaN if cancelled/diverted; base rate 10.7% |
+| cancelled, diverted | 0/1 outcomes (not features) |
+| oracle_origin_*, oracle_dest_* | weather at floor(sched dep hour) / floor(sched arr hour) — oracle only |
+
+Known limitations: hourly arr_count is mostly 0/1 (sparse BTS sample: 0 in 82% of hours);
+gust 97–99% missing; LAW (KLAW) and YUM (KYUM, Meteostat ends 2007) have no weather.
+
 ## Raw schema
 Weather meanings/units are from Meteostat docs; the "@ (date, sched local hr)" join key is the misaligned upstream join described above.
 
