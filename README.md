@@ -1,88 +1,65 @@
 # ✈️ AAR & Delay-Risk Hackathon (KATL, KDFW)
 
 Goal: build features and models that predict, for KATL and KDFW over 2023-2025:
-(a) hourly runway arrival capacity (proxy: realised arrivals per UTC hour), and
-(b) per-flight risk of a >45 min arrival delay, 3-12 h ahead.
-Horizons h are in {3, 6, 9, 12} h. Only features observed at or before target time minus h may be used (leakage-safe).
+Main target (organiser update): per ATL/DFW event, will it be severely delayed (> 45 min)? Departures from the hub use DEP_DELAY, arrivals at the hub use ARR_DELAY (~10% positive). Hourly arrival rate (AAR) is optional per the organisers and is no longer built: the flights file is a ~0.5% sample, so hourly counts can't be measured.
+Horizons h are in {3, 6, 9, 12} h. Only features observed at or before target time minus h may be used (leakage-safe: weather observed at least 3 h before the scheduled time).
 Schemas and the team contract live in CLAUDE.md.
 
 ## 🛠️ What P1 (Data & Features) does
 
-**In one line:** P1 turns the raw flight CSV into two clean, leakage-safe feature tables that the models train on.
+**In one line:** P1 turns the raw flight CSV into one clean, leakage-safe feature table that the model trains on.
 
 What `scripts/run_pipeline.py` does, step by step:
 
-1. 🔎 **Filter & standardise.** Keeps the 25,299 flights that land at or leave from ATL/DFW, and converts airport
-   codes to 4-letter ICAO codes (ATL → KATL) using `config/airports.yaml`.
-2. 🕒 **Fix the clocks.** The CSV's times are local; every time is converted to UTC (scheduled departure,
-   scheduled arrival, actual touchdown). Checked against the original columns: 99.99–100% match.
-3. 🌦️ **Re-fetch the weather.** The CSV's weather is attached to the wrong hour (off by 4–6 h), so P1
-   downloads hourly weather from Meteostat (UTC) for all 208 airports involved.
-4. 🧭 **Runway wind.** Headwind, crosswind and tailwind (sustained and gust) for KATL (runway 080°) and
-   KDFW (runway 180°).
-5. ⏪ **No peeking at the future.** For each target time t and horizon h, features use only weather
-   observed at or before t − h. Extras: 3 h / 6 h rolling max wind and gust, total rain, pressure change.
-6. 🎯 **Targets.** Hourly: `arr_count` (planes that landed each UTC hour) plus scheduled, cancelled and diverted
-   counts and delay stats. Per flight: `delay_min` and `label_45` (more than 45 min late).
-7. ✅ **Leakage test.** `tests/test_leakage.py` checks every row and fails loudly if anything uses future data.
-
-Also: `src/data/fetch_weather.py` is a standalone tool that downloads raw airport weather reports (METAR/ASOS)
-for any ICAO code and date range (not used by the pipeline).
+1. 🔎 **Events:** every flight leaving ATL/DFW becomes a `dep` event, every flight landing there an `arr` event (ATL↔DFW flights give both). Airports can be passed as IATA or ICAO (`config/airports.yaml`).
+2. 🕒 **Clocks:** local hhmm → UTC with each hub's time zone; flights in the DST-ambiguous hour are dropped (none in our data).
+3. 🌦️ **Weather:** ONLY the organiser hourly file (Meteostat/NOAA ISD, stations 72219/72259). A row stamped `time_utc` is treated as available at `time_utc + 1 h` because the stamp can precede the METAR it holds by up to ~52 min.
+4. ⏪ **No peeking:** for each event and h ∈ {3,6,9,12}, features use only rows available at or before `sched_time_utc − h`. Features: temp, prcp, wspd, pres, coco, wdir, headwind, crosswind, tailwind (km/h, provided), thunderstorm/snow flags, 1/3/6 h lags, 3 h pressure tendency, 6 h precipitation sum; `other_*` = same at the other airport (only for ATL↔DFW).
+5. 🎯 **Target:** `delay_min` (DEP_DELAY or ARR_DELAY by event type), `label_45` = delay_min > 45; cancelled → NaN.
+6. ✅ **Leakage test:** `tests/test_leakage.py`.
 
 | 📦 P1 output | One row per | Used for |
 |---|---|---|
-| `data/processed/hourly_features.parquet` | airport × UTC hour × h | arrivals-per-hour model |
-| `data/processed/flight_features.parquet` | flight × h | delay > 45 min model |
+| `data/processed/event_features.parquet` | event × h | delay > 45 min model |
+
+A 5-row sample is at `data/processed/event_features_sample5.csv`.
+
+Also: `src/data/fetch_weather.py` is an optional standalone tool, not used by the pipeline, that downloads raw airport weather reports (METAR/ASOS) for any ICAO code and date range.
 
 ## ⚙️ Setup
 
 ```
 git clone https://github.com/KennotLee/autonomous.git
-cd autonomous && git checkout p1
+cd autonomous
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
-The raw CSV is NOT in git. Put `Flight_Data_With_Weather_Final.csv` into `data/raw/` yourself (ask P1).
+The raw files are NOT in git; put `Flight_Data_With_Weather_Final.csv`, `challenge5_hourly_weather_ATL_DFW.csv` and `challenge5_data_guide.xlsx` (organiser-provided) into `data/raw/`.
 `data/sample/sample_1000.csv` is a 1,000-row sample for quick starts.
 
 ## ▶️ Run
 
 ```
-.venv/bin/python scripts/run_pipeline.py --icao KATL KDFW --start 2023-01-01 --end 2025-07-31 --weather-scope all
+.venv/bin/python scripts/run_pipeline.py --airports ATL DFW
 .venv/bin/python tests/test_leakage.py      # must print ALL LEAKAGE CHECKS PASSED
 ```
-(`--weather-scope all` fetches Meteostat for ~208 airports, ~9 min first time; `hubs` is fast but leaves non-hub weather NaN.)
 
-Outputs (already committed on branch `p1`, no need to rebuild): column-by-column schemas in CLAUDE.md.
-- `data/processed/hourly_features.parquet` — one row per icao × UTC hour × h
-- `data/processed/flight_features.parquet` — one row per flight × h
+Outputs: `data/processed/event_features.parquet`, schema in CLAUDE.md.
 
 ## ⚠️ Known data limitations (read before modelling) — P2/P4
 
-1. **Hourly arrivals are very sparse.** The CSV is a thin sample of BTS flights: ~5.7 ATL and ~4.2 DFW
-   arrivals/day (real traffic is ~1,000+/day). `arr_count` is 0 in 82% of hours, max 4. It is NOT a
-   realistic runway capacity (AAR); treat the hourly task as count/rare-event modelling and say so in the demo.
-2. **The CSV's own weather columns are misaligned by 4–6 h** (upstream joined UTC weather to local clock
-   hours). We do NOT use them; all weather comes from Meteostat hourly (UTC), re-fetched per airport.
-3. **Gusts are 97–99% missing** (`wpgt_kt`, `gust_*` components, `wpgt_max_*`). Snow depth is 100% missing (dropped).
-   `coco` (weather condition) is model-filled by Meteostat, not observed.
-4. **Wind components exist only at KATL/KDFW** (organiser runway headings 080°/180°, used as given; no
-   magnetic correction). Other airports have weather but NaN components.
-5. **No weather for 2 airports:** LAW (no Meteostat station) and YUM (station data ends 2007).
-   Weather coverage in the flight file: origin 99.95%, dest 99.7%.
-6. **Cancelled (345) and diverted (78) hub flights are kept** in the flight file with `delay_min`/`label_45`
-   = NaN. Drop them (`fl[fl.label_45.notna()]`) or decide a policy. In the hourly file they count in
-   `sched_arr_count`, `cancellations`/`diversions`, but not in `arr_count`.
-7. **Class imbalance:** `label_45` positive rate is 10.7%.
-8. **Never use as features:** `oracle_*` (same-hour weather), `arr_count`, `mean_arr_delay`, `share_delayed_45`,
-   `cancellations`, `diversions`, `capacity_ratio`, `delay_min`, `label_45`, `cancelled`, `diverted`.
-   `sched_arr_count` (schedule) is known in advance and may be used. Either filter to one `h` per model or use `h` as a feature.
-9. **A few suspect wind readings (raw Meteostat, left as-is):** only 9 of ~45k hub-hours have sustained wind
-   ≥ 30 kt. Some are real storms (e.g. KDFW 2024-05-28, 48 kt, thunderstorm), but at least two look like data
-   errors: KATL 2025-03-21 02:00 UTC (46.7 kt, fair weather, no rain) and KDFW 2025-06-09 04:00 UTC (45 kt
-   sustained with a 15 kt gust). They feed `wspd_kt` and the wind components; tree models are barely affected.
-10. **Data window:** 2023-01-01 to 2025-07-31 (2025 is partial). Weather at t − h uses the last obs hour
-   ≤ t − h, tolerance 2 h.
+1. **Flights file is a ~0.5% sample** (~6 ATL arrivals/day) → no hourly AAR.
+2. **The flights CSV's own weather is attached at flight time** → used only as `oracle_*` columns (never features).
+3. **`wpgt_*` and `snow_*` are placeholders** → ignored. The hourly file's `wind_gust_kmh` is empty → no gust features.
+4. **Weather exists only for ATL and DFW** → `other_*` features are NaN except for ATL↔DFW flights.
+5. **Cancelled events have `label_45` = NaN** (diverted arrivals too, no ARR_DELAY); drop them or set a policy.
+6. **Never use as features:** `oracle_*`, `delay_min`, `label_45`, `cancelled`, `diverted`, `feature_obs_time`, `sched_time_*`, ids.
+7. **Data window:** 2023-01-01 to 2025-07-31.
+8. **Compare airports by delay rates** (share of events), not raw minutes (organiser rule).
+
+## 📚 Sources & assumptions
+
+See SOURCES.md (every data source, links, licences) and ASSUMPTIONS.md (every assumption with file:line).
 
 ## 🗂️ Layout
 
@@ -115,7 +92,7 @@ aar_hackathon/
 
 ## 🤝 Team workflow
 
-- Everyone commits to `main`, but only inside their own folder:
+- Each person pushes to their own branch (p1, p2, …); the integrator merges into `main`. Work only inside your own folder:
   - P1: `src/data`, `config`, `data/processed`
   - P2: `src/models`, `outputs/predictions`
   - P3: `app/`

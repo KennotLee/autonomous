@@ -1,123 +1,89 @@
-# 🧩 Assumptions
+# 🧩 Assumptions (v2: event-level pipeline after the organiser update)
 
-Every assumption the pipeline and models rely on. **Given by** = *organiser* (from the challenge brief, recorded
-in CLAUDE.md lines 3–5) or *ours* (team decision). "Impact if wrong" is our estimate, not a measured result,
-unless a number is cited.
+**Given by** = *organiser* (updated problem statement and `data/raw/challenge5_data_guide.xlsx`, recorded in
+CLAUDE.md lines 3–9) or *ours* (team decision). "Impact if wrong" is our estimate unless a number is cited.
 
 ## ✈️ Problem framing
 
-1. **Runway headings: KATL 080°, KDFW 180°; all arrivals use that heading.**
-   - Why: needed to turn wind into headwind, crosswind and tailwind.
-   - Where: `config/airports.yaml:13,19`; CLAUDE.md:5.
-   - Given by: organiser. Used as given, with no magnetic-to-true correction (`config/airports.yaml:2`; CLAUDE.md decision 11).
-   - Impact if wrong: wind components are off. A ~5° magnetic/true difference changes crosswind by at most ~9% of wind speed.
-2. **Arrival capacity (AAR) proxy = realised arrivals per UTC hour.**
-   - Why: true runway capacity is not in the data.
-   - Where: CLAUDE.md:3; `src/data/build.py:67-70`; `src/models/aar_config.py:82`.
-   - Given by: organiser (proxy). **Ours:** count by touchdown time (`wheels_on_utc`), excluding cancelled/diverted flights (CLAUDE.md decision 4).
-   - Impact if wrong: the target measures demand, not capacity. With ~5 sampled arrivals per hub per day the runway is never full, so weather effects on capacity can't be learned (README "Known data limitations" #1).
-3. **Forecast horizons h ∈ {3, 6, 9, 12} h.**
-   - Where: CLAUDE.md:4; `config/airports.yaml:40`.
+1. **Target = severe delay per event:** `DEP_DELAY > 45` for departures from ATL/DFW, `ARR_DELAY > 45` for arrivals there. An ATL↔DFW flight gives one departure and one arrival event.
+   - Where: `src/data/events.py:49-50,78-79`; `config/airports.yaml:44`.
+   - Given by: organiser (threshold, delay column per type). **Ours:** "strictly greater"; two events for ATL↔DFW flights.
+   - Result: label rate 10.7% (`data/processed/build_meta.json`), matching the organisers' "about 10%".
+2. **Cancelled events get `label_45` = NaN**; diverted arrivals have no `ARR_DELAY`, so they are NaN too.
+   - Where: `src/data/events.py:78-79`.
+   - Given by: organiser (cancelled); ours (diverted follows from missing `ARR_DELAY`).
+   - Impact: 381 unlabelled events (`build_meta.json`).
+3. **Hourly AAR is not built.**
+   - Why: the organisers say it is optional and can't be measured from the ~0.5% sample.
    - Given by: organiser.
-4. **Severe delay = arrival delay strictly greater than 45 min.**
-   - Where: CLAUDE.md:4; `src/data/flights.py:68`.
-   - Given by: organiser (threshold). **Ours:** "strictly greater", and `ARR_DELAY` (gate arrival) as the delay measure (CLAUDE.md decision 5).
-   - Impact if wrong: labels flip only for flights exactly 45 min late.
+4. **Runway headings: ATL 080°, DFW 180°.**
+   - Where: `config/airports.yaml:10,14`; data guide sheet `weather_columns`.
+   - Given by: organiser. The provided headwind/crosswind/tailwind already use these headings.
+5. **Horizons h ∈ {3, 6, 9, 12} h, minimum 3 h.**
+   - Where: `config/airports.yaml:43`; enforced in `tests/test_leakage.py` (`test_obs_times`).
+   - Given by: organiser.
 
 ## 🕒 Time handling
 
-5. **BTS times are local** (departure in the origin's time zone, arrival in the destination's), **and Meteostat times are UTC.**
-   - Why: BTS reports local clock times; Meteostat documents UTC (SOURCES.md #1).
-   - Where: `src/data/flights.py:1-8,59`; `src/data/weather.py:1-4`.
-   - Given by: ours, from source docs. Verified: converted times match the original local columns on 99.99–100% of rows (`data/processed/build_meta.json`).
-   - Impact if wrong: features misaligned by hours (the organiser CSV's own weather has exactly this error).
-6. **Times made ambiguous by daylight-saving changes are left blank (NaT), not guessed.**
-   - Where: `src/data/flights.py:26`.
-   - Given by: ours. Rows affected: 0 (`build_meta.json`, `dst_unresolved_sched_dep`).
-7. **Scheduled arrival = scheduled departure + `CRS_ELAPSED_TIME`; touchdown = scheduled arrival + `ARR_DELAY` − `TAXI_IN`.**
-   - Why: avoids guessing the date when a flight crosses midnight.
-   - Where: `src/data/flights.py:60-62`.
-   - Given by: ours. Matches the original hhmm columns on 99.99–100% of rows (`build_meta.json`).
-8. **For flights, forecast time t = scheduled departure (UTC).**
-   - Where: `src/data/flights.py:59`; CLAUDE.md decision 6.
+6. **Flight times are local hhmm at the event airport; weather is joined on UTC.**
+   - Why: `time_local` in the hourly file has DST duplicates and gaps (CLAUDE.md "Organiser hourly weather file").
+   - Where: `src/data/events.py:69-73`.
+   - Given by: organiser (local times); ours (join on UTC).
+7. **Arrival date** = FL_DATE −1/0/+1 day, whichever makes arrival − departure closest to `CRS_ELAPSED_TIME`.
+   - Why: avoids needing the other airport's time zone; a wrong day is ≥ 17 h off.
+   - Where: `src/data/events.py:42-46`.
+   - Given by: ours. Matches the previous, validated tz-based method on 100% of events (integration check 2026-10-31).
+8. **Local times in the DST-ambiguous or nonexistent hour → NaT, and the event is dropped.**
+   - Where: `src/data/events.py:73-75`.
+   - Given by: ours. Events dropped: 0 (`build_meta.json`).
+9. **A weather row stamped `time_utc` is available at `time_utc + 1 h`.** A feature is allowed only if its availability time ≤ `sched_time_utc − h`; we use the latest such row within 2 h.
+   - Why: the stamp can precede the METAR it holds by up to ~52 min (checked against IEM METAR for KATL 2024-06-30/07-01; CLAUDE.md).
+   - Where: `config/airports.yaml:34-35`; `src/data/hourly_weather.py:50`; `src/data/build_events.py:24-25`; `tests/test_leakage.py` (`test_availability_lag`).
    - Given by: ours.
-   - Impact if wrong: using arrival time would allow up to one flight-duration more recent weather for the destination.
-9. **A Meteostat value stamped HH:00 counts as observed at HH:00. A feature is allowed only if its stamp ≤ t − h, using the latest one within a 2 h tolerance.**
-   - Why: leakage safety. IEM shows the routine METAR at HH−1:52 equals Meteostat's HH:00 value, so the stamp is at or after the true observation (CLAUDE.md "Layout", `fetch_weather.py` note).
-   - Where: `config/airports.yaml:39`; `src/data/build.py:90,117`; enforced by `tests/test_leakage.py`.
-   - Given by: ours.
+   - Impact: some features are about 1 h older than strictly necessary (a small accuracy cost). Without it, some features could break the 3 h rule by up to ~52 min.
 
 ## 🌦️ Weather
 
-10. **Use Meteostat hourly data, not the organiser CSV's weather columns.**
-    - Why: the CSV's weather is joined 4–6 h off the true hour (100% match to Meteostat with the wrong join; CLAUDE.md "Weather").
-    - Where: `src/data/weather.py`; CLAUDE.md decision 1.
-    - Given by: ours.
-11. **Wind units: Meteostat km/h → knots (÷ 1.852); wind direction = meteorological "from", true north.**
-    - Where: `src/data/config.py:11`; `src/data/weather.py:4`.
-    - Given by: ours. Units are from Meteostat docs; the "from" convention is from the underlying METAR source (Meteostat docs do not say).
-    - Impact if wrong: if direction meant "to", headwind and tailwind would swap.
-12. **Calm wind (speed 0) means all wind components are 0, even with no direction.**
-    - Where: `src/data/weather.py:103`.
-    - Given by: ours.
-13. **Zeros in the CSV's gust (`wpgt`) and snow columns mean "missing".** We drop snow and leave missing gusts blank, with no filling-in.
-    - Why: `wpgt` is 0 in 97.8% of rows and snow in 100% (CLAUDE.md).
-    - Where: `src/data/weather.py:14` (snow not fetched); CLAUDE.md decision 8.
-    - Given by: ours.
-    - Impact: gust features are about 98% empty (README limitation #3).
-14. **Weather condition code (`coco`) comes from Meteostat's model-filled data; other variables are observations only.**
-    - Where: `src/data/weather.py:70-73`; CLAUDE.md decision 2.
-    - Given by: ours.
-    - Impact: `coco` is a model estimate, not an observation.
-15. **Airport codes: ICAO = "K"+IATA, else "P"+IATA, else the overrides in config. LAW has no Meteostat station, so no weather.**
-    - Where: `src/data/weather.py:51`; `config/airports.yaml:26-34`.
-    - Given by: ours.
-16. **Suspect wind readings in Meteostat are kept as-is** (e.g. KATL 2025-03-21 02:00 UTC, 46.7 kt in fair weather).
-    - Where: README limitation #9.
-    - Given by: ours. Only 9 of ~45k hub-hours have wind ≥ 30 kt.
+10. **Weather features come only from the organiser hourly file** (Meteostat / NOAA ISD, stations 72219 and 72259).
+    - Where: `config/airports.yaml:31`; `src/data/hourly_weather.py`.
+    - Given by: organiser.
+11. **The flights CSV's weather is used only as `oracle_*`.**
+    - Why: it is attached at flight time.
+    - Where: `src/data/events.py:18,63-64`; `tests/test_leakage.py` (`test_forbidden_columns`).
+    - Given by: organiser.
+12. **Units are kept as provided:** °C, mm, km/h, hPa; wind direction FROM, degrees true; headwind/crosswind/tailwind as computed by the organisers.
+    - Where: `src/data/hourly_weather.py:13-15`.
+    - Given by: organiser (data guide).
+13. **Thunderstorm flag = coco ∈ {25, 26, 27}; snow flag = coco ∈ {14, 15, 16}.**
+    - Where: `config/airports.yaml:40-41`; `src/data/hourly_weather.py:38-39`.
+    - Given by: organiser groups (data guide `condition_code`).
+    - Impact: other Meteostat winter codes (10–13, 19–22) are not flagged as snow.
+14. **`wpgt_*`, `snow_*` (flights CSV) and `wind_gust_kmh` (hourly file, 100% empty) are not used.**
+    - Given by: organiser (placeholders); ours (empty gust column).
+15. **Lags (1/3/6 h), 3 h pressure tendency and 6 h precipitation sum are computed backwards from the used row**, so they are known at the same availability time.
+    - Where: `src/data/hourly_weather.py:40-46`.
+    - Given by: ours (lag set from the organiser spec).
+16. **`other_*` weather** is filled only when the hourly file covers `other_airport` (ATL↔DFW, 2.4% of rows).
+    - Given by: organiser (optional field); ours (no other source).
+17. **`other_airport` ICAO:** config overrides, else P+IATA for AK/HI/GU, else K+IATA (overrides verified against the Meteostat station list).
+    - Where: `src/data/config.py:34-42`; `config/airports.yaml:19-27`.
+    - Given by: ours. Label only; no weather depends on it except ATL/DFW.
 
-## 🎯 Targets and outcomes
+## 🤖 Models (need updating to v2: P2 dropped, P3 must switch to `event_features.parquet`)
 
-17. **Cancelled and diverted flights are kept, with blank `delay_min`/`label_45`.** They count in `sched_arr_count`/`cancellations`/`diversions` but not in `arr_count`.
-    - Where: `src/data/flights.py:67-68`; `src/data/build.py:67`; CLAUDE.md decisions 4–5.
+18. **P2 arrivals model** (`src/models/aar_*`): **dropped** per the organiser update (AAR optional). Its assumptions (split dates `aar_config.py:28-29`, Poisson `:62`, weather flags `aar_context.py:25-27`) no longer apply to the submission.
+19. **P3 delay model split:** train before 2024-07-01, validation 2024-07..12, test 2025-01..07.
+    - Where: `src/models/delay/train.py:37-38`.
     - Given by: ours.
-    - Impact: 345 cancelled and 78 diverted hub flights are not scored by the delay model.
-18. **The schedule is known in advance:** scheduled counts at t (and t−2…t+2) are allowed as features.
-    - Where: `src/models/aar_context.py:21`; `src/models/delay/features.py:76` (hub schedule congestion).
+20. **P3 alert threshold = maximum F1 on validation.**
+    - Where: `src/models/delay/train.py:91-97`.
     - Given by: ours.
-    - Impact if wrong: if the schedule changed late, these features would include some future information.
-
-## 🤖 Models (P2 arrivals model, P3 delay model)
-
-19. **Split by date: train before 2024-07-01, validation 2024-07..12, test 2025-01..07.**
-    - Where: `src/models/aar_config.py:28-29`; `src/models/delay/train.py:37-38`.
-    - Given by: ours.
-    - Impact: test = Jan–Jul 2025 only (no autumn); validation = H2 only.
-20. **Arrivals model: Poisson objective, with p10/p90 from quantile models; p10 is capped at the point forecast and all values at ≥ 0.**
-    - Where: `src/models/aar_config.py:62,79`; `src/models/train_aar.py:51-52`.
-    - Given by: ours (Poisson beat L2 on validation, per the comment at `aar_config.py:62`).
-21. **Arrivals model "bad/severe weather" exposure flags:**
-    - bad = coco ≥ 7, or precip ≥ 1 mm, or wind ≥ 20 kt, or crosswind ≥ 15 kt
-    - severe = coco ≥ 23, or precip ≥ 4 mm, or wind ≥ 25 kt, or a winter code
-    - Where: `src/models/aar_context.py:25-27`.
-    - Given by: ours.
-22. **Delay model: one LightGBM per horizon; alert threshold = maximum F1 on validation** (0.148 in the committed run).
-    - Where: `src/models/delay/train.py:91-97`; `outputs/metrics/delay_metrics.md`.
-    - Given by: ours.
-    - Impact: treats a missed severe delay and a false alert as equally costly.
-23. **Delay model hub state uses only flights that had landed or left by t − h** (grouped by actual hour). Cancellation rate is excluded because BTS has no cancellation time.
-    - Where: `pipeline/panel.py:112-116`; `src/models/delay/features.py:15-17,35,82`.
-    - Given by: ours (the leak fix; regression test `tests/test_pipeline_leakage.py`).
-24. **Delay model weather-rule baseline:** high risk if thunderstorm or heavy-precip code, gust > 25 kt, or wind > 20 kt (3 h max) at either end.
-    - Where: `src/models/delay/train.py:57-66`; condition codes at `src/models/delay/features.py:36-37`.
-    - Given by: ours.
-25. **Delay model climatology baseline:** training rate by hub × direction × local arrival hour, shrunk toward the overall rate with weight m = 30.
-    - Where: `src/models/delay/train.py:69`.
-    - Given by: ours.
-26. **Full BTS data (all ATL/DFW flights) is used only for hub-level features, never as labels.**
-    - Where: `src/models/delay/features.py`; SOURCES.md #2.
-    - Given by: ours.
-    - Note: the full model's score (PR-AUC 0.299) requires the BTS download and was not reproduced in integration review (UNVERIFIED). The P1-only variant (0.277) was reproduced.
-27. **P3's older pipeline (`pipeline/config.py:35-39`) hardcodes airports, with "approximate" runway headings for KDEN/KORD.**
-    - Used by `pipeline/download.py` only, not by either model's features.
-    - Given by: ours (P3). Should move to `config/airports.yaml`.
+    - Impact: treats a missed delay and a false alert as equally costly.
+21. **P3 hub state uses only flights completed by t − h** (actual-hour grouping), with full BTS fetched by `pipeline/download.py`.
+    - Where: `pipeline/panel.py:112-116`; SOURCES.md #2.
+    - Given by: ours. Allowed by the organisers ("may pull the full BTS on-time data automatically").
+22. **P3 weather rule baseline** (thunderstorm/heavy-precip code, gust > 25 kt, wind > 20 kt) and **climatology** (shrinkage m = 30).
+    - Where: `src/models/delay/train.py:57-69`.
+    - Given by: ours. Must be re-pointed to the v2 columns (km/h, no gusts).
+23. **P3's older `pipeline/config.py:35-39` hardcodes airports and headings.**
+    - Given by: ours (P3). Conflicts with the "any airport code" rule; should read `config/airports.yaml`.

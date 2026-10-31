@@ -6,8 +6,9 @@ Licence/terms are quoted from each source's own website; where that could not be
 
 | # | Source | Used by | Fetch script | Licence / terms |
 |---|---|---|---|---|
-| 0 | Organiser flight + weather CSV | P1 (all features and targets) | provided by organisers (not fetched) | organiser-provided |
-| 1 | Meteostat hourly weather + station metadata | P1 features (both models) | `src/data/weather.py` via `scripts/run_pipeline.py` | CC BY 4.0 (attribution required) |
+| 0 | Organiser flight + weather CSV | P1 events and targets (its weather only as `oracle_*`) | provided by organisers (not fetched) | organiser-provided |
+| 0b | Organiser hourly weather ATL/DFW + data guide | P1 weather features (the only weather source in v2) | provided by organisers (not fetched) | organiser-provided; derived from Meteostat (see #1) |
+| 1 | Meteostat hourly weather (via the organiser file) | v2: indirectly — the organiser hourly file is Meteostat/NOAA ISD | none in v2 (the v1 Meteostat fetch code was removed) | CC BY 4.0 (attribution required) |
 | 2 | BTS Reporting Carrier On-Time Performance (full months) | P3 delay model hub features | `pipeline/download.py` | not checked |
 | 3 | Iowa Environmental Mesonet (IEM) ASOS/METAR archive | standalone tool, not used by any model | `src/data/fetch_weather.py` | public domain |
 
@@ -17,23 +18,29 @@ Licence/terms are quoted from each source's own website; where that could not be
 - **What:** BTS on-time flight records joined with Meteostat-style weather columns (148,273 rows × 123 columns,
   2023-01-01 to 2025-07-31). Facts: CLAUDE.md "Verified facts about the raw data".
 - **Provided by:** hackathon organisers. Placed in `data/raw/` locally; **never committed** (`.gitignore`).
-- **Fields used:** `src/data/flights.py:12-14` (`USECOLS`: FL_DATE, OP_UNIQUE_CARRIER, OP_CARRIER_FL_NUM, TAIL_NUM,
-  ORIGIN, DEST, CRS_DEP_TIME, CRS_ARR_TIME, ARR_TIME, WHEELS_ON, TAXI_IN, ARR_DELAY, CANCELLED, DIVERTED,
-  CRS_ELAPSED_TIME, DISTANCE).
-- **Not used:** the CSV's own weather columns (`*_ORIGIN`, `*_DEST`). They are joined 4–6 h off the true hour
-  (verified against Meteostat; CLAUDE.md "Weather: what the file really contains").
+- **Fields used:** `src/data/events.py:19-21` (`USECOLS`: FL_DATE, OP_UNIQUE_CARRIER, OP_CARRIER_FL_NUM, ORIGIN, DEST,
+  ORIGIN/DEST_STATE_ABR, CRS_DEP_TIME, CRS_ARR_TIME, CRS_ELAPSED_TIME, DEP_DELAY, ARR_DELAY, CANCELLED, DIVERTED,
+  plus temp/prcp/wspd/pres/coco _ORIGIN/_DEST as `oracle_*` only).
+- **Weather columns:** attached at flight time (and 4–6 h off the true hour, CLAUDE.md), so used only as `oracle_*`;
+  `wpgt_*`/`snow_*` ignored (organiser placeholders).
 
-## 1. Meteostat: hourly weather and station metadata
+## 0b. Organiser hourly weather: `challenge5_hourly_weather_ATL_DFW.csv` (+ `challenge5_data_guide.xlsx`)
+- **What:** hourly weather for ATL and DFW, 2023-01-01 to 2025-07-31, UTC and local time, wind direction and
+  headwind/crosswind/tailwind (km/h) for runways 080°/180°. Data guide: "Meteostat hourly (NOAA ISD), stations 72219 (ATL) and 72259 (DFW)".
+- **Provided by:** hackathon organisers; placed in `data/raw/`; never committed. Path in `config/airports.yaml:31`.
+- **Fields used:** `src/data/hourly_weather.py:13-15` (temp_c, precip_mm, wind_speed_kmh, pressure_hpa, condition_code,
+  wind_dir_deg, headwind_kmh, crosswind_kmh, tailwind_kmh) + `time_utc`. Not used: `wind_gust_kmh` (100% empty), `time_local` (DST duplicates).
+- **Attribution:** as Meteostat-derived data, credit Meteostat (#1).
+
+## 1. Meteostat: hourly weather and station metadata (v1 fetch removed in v2; still the upstream of #0b)
 - **Website:** https://meteostat.net
 - **Docs:** API hourly format https://dev.meteostat.net/api/point/hourly.html ·
   data formats/units https://dev.meteostat.net/formats.html · Python library https://dev.meteostat.net/python/
 - **Endpoint actually called:** the `meteostat` Python package (v1.7.6, `requirements.txt`) downloads from
   `https://bulk.meteostat.net/v2/` (installed package, `meteostat/interface/base.py:21`).
-- **Fetch script:** `src/data/weather.py:34-71` (`Stations().fetch()`, `Hourly(..., model=False/True).fetch()`),
-  run by `scripts/run_pipeline.py`; cached in `data/interim/weather_raw/` (not committed).
-- **Fields used:** `temp, dwpt, rhum, prcp, wdir, wspd, wpgt, pres` from observations (`src/data/weather.py:14`);
-  `coco` from model-filled data (`src/data/weather.py:71-73`); station `icao` and `timezone` (`src/data/weather.py:36-38`).
-  Units per Meteostat docs: °C, mm (1 h total), km/h, sea-level hPa, degrees; timestamps UTC.
+- **v2 status:** the P1 pipeline no longer fetches Meteostat (organiser update: use only the provided hourly file).
+  v1 fetched it via `src/data/weather.py` (deleted in v2; see git history before commit `p1: switch to provided hourly weather`).
+- **Units (Meteostat docs):** °C, mm (1 h total), km/h, sea-level hPa, degrees; timestamps UTC.
 - **Stations:** looked up by ICAO at runtime (e.g. KATL → 72219, KDFW → 72259); see `config/airports.yaml`.
 - **Licence:** "Creative Commons Attribution 4.0 International (CC BY 4.0)" https://creativecommons.org/licenses/by/4.0
   (https://dev.meteostat.net/license.html). "You must give credit to Meteostat and its meteorological data providers."

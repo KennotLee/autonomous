@@ -1,21 +1,23 @@
-# AAR / Delay-Risk Hackathon — Data & Features (P1)
+# Delay-Risk Hackathon (Challenge #5) — Data & Features (P1)
 
-Goal: features for (a) hourly arrival capacity at KATL/KDFW (proxy: realised arrivals/hr) and
-(b) per-flight P(arr delay > 45 min), horizons h ∈ {3,6,9,12} h, leakage-safe.
-Organiser assumptions: KATL runway heading 080°, KDFW runway heading 180°.
+**Organiser update (2026-10-31, overrides earlier goals):** main target = severe delay per ATL/DFW event:
+`ARR_DELAY > 45` for arrivals at the hub, `DEP_DELAY > 45` for departures from it (~10% positive).
+Hourly AAR is optional and **dropped** (flights file is a ~0.5% sample). Weather features come ONLY from the
+organiser hourly file; the flights CSV's weather is allowed only as `oracle_*`. Leakage rule: weather observed
+at least 3 h before the scheduled time. Horizons h ∈ {3,6,9,12}. Pipeline accepts any configured airport (IATA or ICAO).
+Organiser assumptions: KATL runway heading 080°, KDFW runway heading 180° (data guide xlsx).
 Out of scope for P1: splits, models, baselines, metrics, dashboard.
 
 ## Layout
-- `data/raw/Flight_Data_With_Weather_Final.csv` — raw copy (from ~/Downloads). Never edit.
-- `data/sample/sample_1000.csv` — first 1,000 raw rows (all airports, unfiltered). Committed.
-- `data/interim/schema_profile.csv` — per-column profile (dtype, % missing, min/max, examples). Not committed.
-- `config/airports.yaml` — per-ICAO runway heading, timezone, meteostat lookup. `src/data/` — P1 pipeline code.
-- `scripts/` — profiling scripts + `run_pipeline.py` entry. Env: `.venv/bin/python`; `pip install -r requirements.txt`.
-- `src/data/fetch_weather.py` — standalone METAR/ASOS downloader (IEM archive) for any ICAO + date range;
-  not used by the pipeline. `.venv/bin/python src/data/fetch_weather.py --icao KATL --start 2024-07-01 --end 2024-07-31`.
-  IEM gusts: ~15–18% of reports at KATL/KDFW (vs ~1–3% in Meteostat) → candidate gust source for a v2.
-  IEM routine METAR at HH:52 == Meteostat value stamped HH+1:00 (so Meteostat stamp ≥ true obs time).
-- Repo: https://github.com/KennotLee/autonomous (P1 work on branch `p1`). Team workflow rules in README.md.
+- `data/raw/Flight_Data_With_Weather_Final.csv`, `data/raw/challenge5_hourly_weather_ATL_DFW.csv`,
+  `data/raw/challenge5_data_guide.xlsx` — organiser files. Never edit, never committed.
+- `data/sample/sample_1000.csv` — first 1,000 raw flight rows. Committed.
+- `config/airports.yaml` — per-ICAO iata, timezone, runway heading; weather settings; horizons; delay threshold.
+- `src/data/` — P1 code: `events.py` (flights → dep/arr events, UTC, labels), `hourly_weather.py` (organiser
+  hourly file → features), `build_events.py` (as-of join → event_features), `config.py`.
+- `scripts/run_pipeline.py` — single entry. `tests/test_leakage.py` — leakage test (~2 s).
+- `src/data/fetch_weather.py` — optional standalone METAR/ASOS downloader (IEM); not used by the pipeline.
+- Repo: https://github.com/KennotLee/autonomous. P1 work on branch `p1`; integrator merges into `main`.
 
 ## Verified facts about the raw data (full file, 2026-10-31)
 - 148,273 rows × 123 cols, BTS On-Time Performance + 14 Meteostat-style weather cols.
@@ -28,7 +30,7 @@ Out of scope for P1: splits, models, baselines, metrics, dashboard.
 - `*_DELAY` cause columns are post-hoc attributions → never use as features.
 - No wind direction column in the file.
 
-## Weather: what the file really contains (verified against Meteostat)
+## Flights CSV weather (now oracle_* only; verified against Meteostat)
 - File weather == Meteostat hourly (model=True) for the airport's station, joined on
   **FL_DATE + scheduled LOCAL clock hour treated as a UTC hour**. Test on all ATL/DFW departures:
   match 100% (temp/wspd/pres) with naive key, ≤12% when the local time is properly converted to UTC.
@@ -42,57 +44,55 @@ Out of scope for P1: splits, models, baselines, metrics, dashboard.
   coco is only populated with model=True (model-filled). Meteostat does NOT give better gusts.
 - In the file, wpgt 0 in ~97.8% rows and snow 0 in 100% rows → NaNs filled with 0 upstream; treat as missing.
 
+
+## Organiser hourly weather file (checked 2026-10-31)
+- 45,264 rows = ATL, DFW × 22,632 hours, 2023-01-01 00:00 to 2025-07-31 23:00 UTC; columns: airport (IATA),
+  runway_heading_deg, time_utc, time_local, temp_c, dewpoint_c, rel_humidity_pct, precip_mm, wind_dir_deg,
+  wind_speed_kmh, wind_gust_kmh, pressure_hpa, condition_code, headwind_kmh, crosswind_kmh, tailwind_kmh.
+- `wind_gust_kmh` 100% empty (not used). precip_mm 0.12% and condition_code 0.03% missing. Calm = dir 0, speed 0.
+- `time_local` is wall clock with DST (2 duplicate and 3 missing local hours per airport) → we join on `time_utc`.
+- **Stamp ≠ observation time:** vs IEM METAR (KATL 2024-06-30/07-01) a row stamped HH:00 holds either the
+  HH−1:52 or the HH:52 report (e.g. 00:00 = 00:52 METAR). So a row is treated as available at `time_utc + 1 h`.
+
 ## How to load (teammates)
 ```python
 import pandas as pd
-hr = pd.read_parquet("data/processed/hourly_features.parquet")   # 181,048 rows = 2 icao × 22,631 h × 4 horizons
-fl = pd.read_parquet("data/processed/flight_features.parquet")   # 101,196 rows = 25,299 flights × 4 horizons
-X = hr[hr.h == 6]   # filter to one h, or keep all h and use h as a feature; never train on oracle_* or target columns
+ev = pd.read_parquet("data/processed/event_features.parquet")  # 102,448 rows = 25,612 events × 4 horizons
+X = ev[ev.h == 6]                    # one h per model, or keep all h and use h as a feature
+y = X.label_45                       # NaN for cancelled (and diverted arrivals): drop or set a policy
 ```
-Rebuild: `.venv/bin/python scripts/run_pipeline.py --icao KATL KDFW --start 2023-01-01 --end 2025-07-31 [--weather-scope all]`
-then `.venv/bin/python tests/test_leakage.py` (must print ALL LEAKAGE CHECKS PASSED). All timestamps are tz-aware UTC.
+Rebuild: `.venv/bin/python scripts/run_pipeline.py --airports ATL DFW` then `.venv/bin/python tests/test_leakage.py`.
+All `*_utc` timestamps are tz-aware UTC; `sched_time_local` is naive local wall clock of the event airport.
 
-## Output schemas (v1.1, 2026-10-31; branch p1)
-Weather feature block `<F>` (from Meteostat, last obs hour ≤ t − h, tolerance 2 h; units in name):
-- base: temp_c, dwpt_c, rhum_pct, prcp_mm (1-h total), wdir_deg (from, true), wspd_kt, wpgt_kt (98% NaN), pres_hpa (sea level), coco (1–27, model-filled)
-- rolling, window (T−w, T] at obs time T, w ∈ {3,6}: wspd_max_{w}h_kt, wpgt_max_{w}h_kt, prcp_sum_{w}h_mm, pres_chg_{w}h_hpa (= pres(T) − pres(T−w))
-- runway components (only airports with runway_heading_deg in config, else NaN): headwind_kt, crosswind_kt, tailwind_kt,
-  gust_headwind_kt, gust_crosswind_kt, gust_tailwind_kt. θ = wdir − heading; head = s·cosθ; cross = |s·sinθ|; tail = max(0, −head); calm → 0.
+## Output schema: `data/processed/event_features.parquet` (v2, 2026-10-31)
+One row per (event_id, h). Events: 16,151 dep + 9,461 arr (ATL↔DFW flights give one of each); label_45 rate
+10.7% (dep 11.1%, arr 10.0%; KATL 9.1%, KDFW 12.6%); 381 events with label NaN; 0 events dropped for DST.
 
-**hourly_features.parquet** (one row per icao × target_hour_utc × h)
 | column | meaning |
 |---|---|
-| icao | KATL / KDFW |
-| target_hour_utc | start of UTC hour t (grid covers full local days 2023-01-01..2025-07-31) |
+| event_id | `flight_key + "_" + event_type` (unique per event) |
+| flight_key | `FL_DATE_<carrier><flnum>_<ORIGIN>_<DEST>` (+ `_<CRS_DEP_TIME>` if duplicated) |
+| event_type | `dep` (flight leaves the hub) or `arr` (flight lands at the hub) |
+| airport, other_airport | event hub ICAO; the other end's ICAO (overrides, else P+IATA for AK/HI/GU, else K+IATA) |
+| sched_time_local | scheduled time at the event airport, local wall clock (naive) |
+| sched_time_utc | same in UTC (t). Arrival date resolved via CRS_ELAPSED_TIME; matches previous method 100% |
 | h | horizon, hours ∈ {3,6,9,12} |
-| feature_obs_time | UTC stamp of the weather hour used (≤ t − h) |
-| `<F>` | weather features at icao |
-| hour_local, dow_local (0=Mon), month_local, hour_utc | calendar of t (allowed) |
-| sched_arr_count | flights scheduled to arrive in hour t (incl. cancelled) — schedule, known in advance |
-| arr_count | **target**: landed (not cancelled/diverted) by floor(wheels_on_utc) |
-| mean_arr_delay, share_delayed_45, cancellations, diversions | outcomes by scheduled-arrival hour (targets/eval only, NOT features) |
-| capacity_ratio | arr_count / sched_arr_count, NaN if 0 (target/eval only) |
-| oracle_`<base + components>` | weather stamped exactly at t — oracle comparison only |
-
-**flight_features.parquet** (one row per flight × h; flights with ORIGIN or DEST in hubs)
-| column | meaning |
-|---|---|
-| flight_id | `FL_DATE_<carrier><flnum>_<ORIGIN>_<DEST>` (unique) |
-| origin_icao, dest_icao | ICAO codes (K/P+IATA or config overrides) |
-| sched_time_utc | t = scheduled departure UTC |
-| sched_arr_utc | scheduled arrival UTC (= t + CRS_ELAPSED_TIME) |
-| h | horizon ∈ {3,6,9,12} |
-| feature_obs_time | max(origin_, dest_feature_obs_time), all ≤ t − h |
-| carrier, distance_mi, crs_elapsed_min | schedule info (allowed) |
-| dep_hour_local, dow_local, month_local (origin tz), arr_hour_local (dest tz), dep_hour_utc | calendar (allowed) |
-| origin_`<F>`, dest_`<F>` | weather features at both ends (v1.1, `--weather-scope all`): non-null origin 99.95%, dest 99.7%; runway components only at hub ends |
-| delay_min | **target**: ARR_DELAY minutes (signed); NaN if cancelled/diverted |
-| label_45 | **target**: delay_min > 45 (1/0), NaN if cancelled/diverted; base rate 10.7% |
+| feature_obs_time | availability time (= time_utc + 1 h) of the weather row used; always ≤ sched_time_utc − h |
+| temp, prcp, wspd, pres, coco, wdir | event-airport weather (°C, mm, km/h, hPa, Meteostat code, deg FROM true) |
+| headwind, crosswind, tailwind | provided components, km/h (runway 080° ATL / 180° DFW) |
+| ts_flag, snow_flag | coco ∈ {25,26,27} thunderstorm; coco ∈ {14,15,16} snow (data guide groups); NaN if coco NaN |
+| `<v>_lag{1,3,6}h` | v ∈ wspd, crosswind, tailwind, prcp, temp, k hours before the used row |
+| pres_tend_3h, prcp_sum_6h | pressure change over 3 h; precip sum over the 6 h ending at the used row |
+| other_feature_obs_time, other_* | same weather set at other_airport; only non-null for ATL↔DFW (2.4% of rows) |
+| hour, dow, month, carrier | calendar of sched_time_local (dow 0 = Monday); operating carrier |
+| delay_min | **target**: DEP_DELAY (dep) or ARR_DELAY (arr), minutes; NaN if cancelled or no delay recorded |
+| label_45 | **target**: delay_min > 45 (1/0); NaN if delay_min NaN |
 | cancelled, diverted | 0/1 outcomes (not features) |
-| oracle_origin_*, oracle_dest_* | weather at floor(sched dep hour) / floor(sched arr hour) — oracle only |
+| oracle_temp, oracle_prcp, oracle_wspd, oracle_pres, oracle_coco | flights-CSV weather at event time (comparison only, never features) |
 
-Known limitations: hourly arr_count is mostly 0/1 (sparse BTS sample: 0 in 82% of hours);
-gust 97–99% missing; LAW (KLAW) and YUM (KYUM, Meteostat ends 2007) have no weather.
+Never features: ids, `sched_time_*`, `feature_obs_time`, `other_feature_obs_time`, targets, `cancelled`, `diverted`, `oracle_*`.
+Dropped in v2 (organiser update): `hourly_features.parquet`, `flight_features.parquet`, arr_count, capacity_ratio,
+sched counts, all Meteostat-fetched weather.
 
 ## Raw schema
 Weather meanings/units are from Meteostat docs; the "@ (date, sched local hr)" join key is the misaligned upstream join described above.
@@ -213,3 +213,10 @@ Weather meanings/units are from Meteostat docs; the "@ (date, sched local hr)" j
 A. Duplicate sample removed; schema_profile.csv → data/interim/.
 B. Prediction CSVs: aar_preds.csv (icao, target_hour_utc, h, pred_arr_count);
    delay_preds.csv (flight_id, sched_time_utc, h, p_delay45).
+
+(Decisions 1, 2, 4, 7, 8, 9, 10 above are superseded by C1–C4 for the v2 event pipeline.)
+C1. (organiser update) Target per event: dep → DEP_DELAY > 45, arr → ARR_DELAY > 45; ATL↔DFW = 2 events;
+    cancelled → label NaN. Hourly panel / AAR dropped. Weather only from the organiser hourly file.
+C2. Join weather on UTC (time_local has DST duplicates/gaps); flight local → UTC with hub tz; DST-ambiguous → dropped (0).
+C3. Hourly row available at time_utc + 1 h (stamp can precede the METAR by ~52 min); as-of ≤ t − h, tolerance 2 h.
+C4. Units kept as provided (km/h); coco flags use the data-guide groups; gust/snow placeholders ignored.

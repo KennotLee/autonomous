@@ -1,32 +1,19 @@
 {
- "validation": {
-  "rows_hub": 25299,
-  "dst_unresolved_sched_dep": 0,
-  "unmapped_airports": 0,
-  "sched_arr_vs_CRS_ARR_TIME": [
-   0.9999,
-   25299
-  ],
-  "gate_arr_vs_ARR_TIME": [
-   1.0,
-   24876
-  ],
-  "wheels_on_vs_WHEELS_ON": [
-   1.0,
-   24876
-  ]
+ "stats": {
+  "flights_touching_hubs": 25299,
+  "events": 25612,
+  "events_dropped_dst": 0,
+  "dep_events": 16151,
+  "arr_events": 9461,
+  "label_45_rate": 0.107,
+  "label_nan": 381
  },
- "weather_scope": "all",
  "hubs": [
   "KATL",
   "KDFW"
  ],
- "hourly_shape": [
-  181048,
-  53
- ],
- "flight_shape": [
-  101196,
-  97
- ]
+ "rows": 102448,
+ "cols": 79,
+ "weather_file": "/home/zhuangda/aar_hackathon/data/raw/challenge5_hourly_weather_ATL_DFW.csv",
+ "weather_coverage": 1.0
 }
