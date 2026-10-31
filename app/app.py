@@ -9,7 +9,7 @@ Reads committed team outputs only:
   outputs/predictions/delay_preds.csv          P3 model risk per (event_id, h)
   outputs/predictions/event_baseline_preds.csv P4 weather-rule baseline (B3), used on the performance tab
   outputs/metrics/event_*.csv, src/models/delay/artifacts/meta.json, outputs/predictions/aar_preds.csv (P2)
-Writes app/decision_log.csv. No LLM: risk = LightGBM, alerts/recommendations = explicit rules, ranges = statistics.
+Writes app/decision_log.csv. No LLM at runtime (see AI_USE).
 """
 import json
 import math
@@ -39,10 +39,17 @@ COCO = {1: "clear", 2: "fair", 3: "cloudy", 4: "overcast", 5: "fog", 6: "freezin
         24: "hail", 25: "thunderstorm", 26: "heavy thunderstorm", 27: "storm"}
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
 DAYS = "Mon Tue Wed Thu Fri Sat Sun".split()
-DEMO_DAYS = {"✅ Good day (hand-picked): ATL 6 Apr": ("KATL", date(2025, 4, 6)),
-             "❌ Missed storm: DFW 23 Apr": ("KDFW", date(2025, 4, 23)),
-             "❌ False alarm: DFW 30 May": ("KDFW", date(2025, 5, 30))}
+# demo presets = the evaluated test days (src/eval/failure_cases.py); shown only for airports present in the data
+DEMO_DAYS = {"✅ Good day (hand-picked):": ("KATL", date(2025, 4, 6)),
+             "❌ Missed storm:": ("KDFW", date(2025, 4, 23)),
+             "❌ False alarm:": ("KDFW", date(2025, 5, 30))}
 DECISIONS = ["—", "Act", "Watch", "Override: no action"]
+AI_USE = ("No LLM at runtime: risk = LightGBM, recommendations = explicit rules, reasons = LightGBM feature "
+          "contributions. Built with AI coding assistance (Claude Code); explanatory text was AI-drafted and "
+          "reviewed by the team.")
+SRC = "Data: organiser files (BTS on-time sample; Meteostat / NOAA ISD weather, CC BY 4.0)."
+SRC_BTS = "Data: US DOT BTS On-Time Performance (full, fetched by script); Meteostat / NOAA ISD weather, CC BY 4.0."
+RATE = "rate = severe events (> 45 min late) ÷ scored events (cancelled and diverted are not scored)"
 
 st.set_page_config(page_title="Weather delay-risk board", page_icon="✈️", layout="wide")
 
@@ -188,7 +195,11 @@ base_rates, rare_counts = train_stats()
 res = load_csv("event_model_vs_baseline_p3_final.csv")
 cal_all = load_csv("event_calibration_p3_final.csv")
 
-for key, val in [("icao", "KDFW"), ("day", date(2025, 5, 2))]:
+hubs = [k for k in airports if k in set(ev["airport"])]  # configured airports that have events
+demo_days = {f"{lab} {airports[a]['iata']} {d:%d %b}": (a, d) for lab, (a, d) in DEMO_DAYS.items() if a in hubs}
+first = next(iter(demo_days.values()), (hubs[0], date(2025, 5, 2)))
+HEADINGS = ", ".join(f"{airports[k]['iata']} {airports[k]['runway_heading_deg']:03d}°" for k in hubs)
+for key, val in [("icao", first[0]), ("day", first[1])]:
     st.session_state.setdefault(key, val)
 
 
@@ -213,7 +224,7 @@ def pick_code():
 
 with st.sidebar:
     st.markdown("### ✈️ Weather delay-risk board")
-    icao = st.selectbox("Hub", sorted(set(ev["airport"])), key="icao",
+    icao = st.selectbox("Hub", hubs, key="icao",
                         format_func=lambda k: f"{airports.get(k, {}).get('iata', k)} ({k})")
     h = st.radio("Warn how far ahead?", HORIZONS, index=0, horizontal=True, format_func=lambda x: f"{x} h")
     test_days = sorted(ev.loc[ev["event_id"].isin(preds["event_id"]), "sched_time_local"].dt.date.unique())
@@ -221,19 +232,19 @@ with st.sidebar:
     reveal = st.toggle("Replay: show what actually happened", value=False)
     user = st.text_input("Your name (to log decisions)", value="")
     st.markdown("**Demo days**")
-    for label, (a, dd) in DEMO_DAYS.items():
+    for label, (a, dd) in demo_days.items():
         st.button(label, on_click=jump, args=(a, dd), width="stretch")
     with st.expander("Settings"):
         st.text_input("Other airport code (IATA/ICAO)", key="code", on_change=pick_code, placeholder="e.g. ORD")
         if st.session_state.get("code_msg"):
             st.error(st.session_state["code_msg"])
         default_thr = thr_by_apt.get(icao, meta["threshold"])
-        st.session_state.setdefault(f"thr_{icao}", float(round(default_thr, 3)))
-        thr = st.slider("Alert at risk ≥", 0.02, 0.50, step=0.005, key=f"thr_{icao}",
+        if st.session_state.get("thr_for") != icao:  # new hub -> its validated default threshold
+            st.session_state.update(thr=float(round(default_thr, 3)), thr_for=icao)
+        thr = st.slider("Alert at risk ≥", 0.02, 0.50, step=0.005, key="thr",
                         help="Default: tuned per airport on 2024-H2 validation data (never on test).")
         st.caption(f"Runway heading {airports[icao]['runway_heading_deg']}° (organiser assumption).")
-    st.caption(f"Model: P3 LightGBM ({model_version}). Weather: Meteostat via organiser file (CC BY 4.0). "
-               "Flights: BTS sample.")
+    st.caption(f"Model: P3 LightGBM ({model_version}). {SRC} No LLM at runtime; built with Claude Code assistance.")
 
 tz = airports[icao]["timezone"]
 iata = airports[icao]["iata"]
@@ -263,12 +274,13 @@ with tabs[0]:
         c = st.columns(4 if reveal else 3)
         c[0].metric("Flights (sample)", len(d))
         c[1].metric("Alerts", int(d["alert"].sum()), help=f"risk ≥ {thr:.2f}")
-        c[2].metric("Expected late rate", f"{d['risk_prob'].mean():.0%}", delta=f"normal {base_rate:.0%}", delta_color="off")
+        c[2].metric("Expected late rate", f"{d['risk_prob'].mean():.0%}", delta=f"normal {base_rate:.0%}", delta_color="off",
+                    help=f"Mean model risk. Normal = 2023–24 {RATE}.")
         if reveal:
             lab = d[d["scored"]]
             tp = int((lab["alert"] & (lab["label_45"] == 1)).sum())
             c[3].metric("Actual late rate", f"{lab['label_45'].mean():.0%}",
-                        help=f"{tp} of {int(lab['label_45'].sum())} late flights had an alert")
+                        help=f"{RATE}. {tp} of {int(lab['label_45'].sum())} late flights had an alert.")
 
         # recommendations: explicit rule on 3-hour windows, one line each
         d["win"] = (d["sched_time_local"].dt.hour // 3) * 3
@@ -277,9 +289,14 @@ with tabs[0]:
             if mean_risk < ELEVATED_X * base_rate and n_alert < ELEVATED_ALERTS:
                 continue
             wx = "adverse weather at t−h" if g["adverse"].any() else "no adverse weather: risk from history"
+            obs = g["feature_obs_time"].dropna()
+            sig = ((f"signal: weather observed {obs.min():%H:%M}Z"
+                    + (f"–{obs.max():%H:%M}Z" if obs.max() != obs.min() else "")) if len(obs) else "signal: none")
             st.warning(f"**{w:02d}:00–{w + 3:02d}:00 elevated** — {n_alert} alerts, mean risk {mean_risk:.0%} vs normal "
-                       f"{base_rate:.0%}; {wx}. *Suggest:* review the rate for this window and plan a GDP early rather "
-                       f"than a ground stop at onset; airline: check connections, aircraft and crew for alerted flights.")
+                       f"{base_rate:.0%}; {wx} ({sig}). *Consider* reviewing the rate for this window and planning a GDP "
+                       f"early rather than a ground stop at onset; airline: consider checking connections, aircraft "
+                       f"and crew for alerted flights. Rule: mean risk ≥ {ELEVATED_X}× normal or ≥ {ELEVATED_ALERTS} "
+                       f"alerts in a 3-hour window.")
 
         order = d.sort_values("risk_prob", ascending=False, na_position="last").reset_index(drop=True)
         caution = []
@@ -336,6 +353,7 @@ with tabs[0]:
                 rows[["logged_at_utc", "user", "airport", "h", "event_id", "risk_prob", "threshold", "feature_obs_time",
                       "decision", "note", "model_version"]].to_csv(LOG, mode="a", header=not LOG.exists(), index=False)
                 st.success(f"Logged {len(rows)} decision(s).")
+        st.caption(f"{SRC} Risk: P3 LightGBM ({model_version}); flights shown are a ~0.5% sample of real traffic.")
         with st.expander("Decision log"):
             if LOG.exists():
                 st.dataframe(pd.read_csv(LOG).iloc[::-1], hide_index=True, width="stretch")
@@ -361,13 +379,13 @@ with tabs[1]:
         c1, c2 = st.columns([3, 2])
         c1.altair_chart((bar + bar.mark_text(align="left", dx=3).encode(text=alt.Text("pr_auc:Q", format=".3f")))
                         .properties(height=180), width="stretch")
+        c1.caption(f"2025 test, {h} h ahead. {SRC}")
         tie = m["pr_auc_diff_ci90_lo"] <= 0
         c2.markdown(f"**vs simple weather rule:** {m['pr_auc_impr_pct']:+.0f}%  \n90% CI of difference "
                     f"[{m['pr_auc_diff_ci90_lo']:+.3f}, {m['pr_auc_diff_ci90_hi']:+.3f}]  \n"
                     + ("➡ **not significant: a tie**" if tie else "➡ **significant**"))
-        atl = res[(res["h"] == h) & (res["slice"] == "ATL")].iloc[0]
-        dfw = res[(res["h"] == h) & (res["slice"] == "DFW")].iloc[0]
-        c2.caption(f"ATL {atl['pr_auc_impr_pct']:+.0f}%, DFW {dfw['pr_auc_impr_pct']:+.0f}% vs the rule. "
+        per_apt = res[(res["h"] == h) & res["slice"].isin([airports[k]["iata"] for k in hubs])]
+        c2.caption(", ".join(f"{r.slice} {r.pr_auc_impr_pct:+.0f}%" for r in per_apt.itertuples()) + " vs the rule. "
                    "Across h the model stays at 0.22 while the rule fades (0.215 → 0.202).")
 
         op = operating_point(thr_by_apt, meta["threshold"])
@@ -376,6 +394,7 @@ with tabs[1]:
         st.dataframe(op[op["h"] == h].drop(columns="h").style.format(
             {"model precision": "{:.0%}", "model recall": "{:.0%}", "rule recall (same alerts)": "{:.0%}"}),
             hide_index=True, width="stretch")
+        st.caption(f"Precision = right alerts ÷ alerts; recall = alerted late flights ÷ late flights. {SRC}")
 
         if cal_all is not None:
             c = cal_all[(cal_all["h"] == h) & (cal_all["predictor"] == "model")]
@@ -389,11 +408,12 @@ with tabs[1]:
             c1, c2 = st.columns(2)
             c1.markdown("**Is the risk honest?** Predicted vs actual (dashed = perfect)")
             c1.altair_chart((diag + pts).properties(height=220), width="stretch")
-            c1.caption("Slightly low: 2025 had more delays (13%) than the training years (10%).")
+            c1.caption(f"Slightly low: 2025 had more delays (13%) than the training years (10%). {SRC}")
             c2.markdown("**History:** monthly late rate (rates, so hubs compare fairly)")
             c2.altair_chart(alt.Chart(mm).mark_line(point=True).encode(
                 x=alt.X("month:T", title=None), y=alt.Y("late rate:Q", axis=alt.Axis(format="%")), color="airport:N")
                 .properties(height=220), width="stretch")
+            c2.caption(f"Monthly {RATE}. Train 2023–24, test 2025. {SRC}")
 
     st.markdown("### Where it fails, and how you would know")
     f1, f2 = st.columns(2)
@@ -435,7 +455,7 @@ with tabs[2]:
             st.caption("Red = forecast, shaded = P10–P90 range, dashed = schedule"
                        + (", dots = actual" if reveal else "") + ". Measured on 2025 (P2 leak-fixed model): 1–7% lower error than "
                        "reading the schedule well, 4–13% lower in bad-weather hours; the range is too narrow (covers "
-                       "69–75%, should be 80%).")
+                       "69–75%, should be 80%). " + SRC_BTS)
 
 # ------------------------------------------------------------------ 4 how it works
 with tabs[3]:
@@ -443,16 +463,21 @@ with tabs[3]:
     margin = (sub["sched_time_utc"] - pd.to_timedelta(sub["h"], unit="h") - sub["feature_obs_time"]) / pd.Timedelta(hours=1)
     st.metric("Rows where the weather used was observed ≥ h hours before the flight", f"{(margin >= 0).mean():.2%}",
               help=f"Checked live on {len(sub):,} rows.")
-    st.markdown("""
+    st.markdown(f"""
 - **Risk** = LightGBM trained on 2023–24 flights (departures: DEP_DELAY > 45, arrivals: ARR_DELAY > 45), tested on 2025.
 - **Inputs** = hourly weather at the hub observed **at least h hours earlier** (+1 h because each report lands up to
-  52 min after its timestamp), wind split into head/cross/tailwind on the runway (ATL 080°, DFW 180°), and the
+  52 min after its timestamp), wind split into head/cross/tailwind on the runway ({HEADINGS}), and the
   schedule (hour, day, month, carrier, route). The flights file's own weather and anything known only after
   departure (actual times, delays, cancellations) are **never** used.
-- **Alerts and recommendations** = explicit thresholds and rules, shown on screen. **Ranges** = statistics. No LLM.
+- **Alerts and recommendations** = explicit thresholds and rules, shown on screen. **Ranges** = statistics.
+- **AI use:** {AI_USE}
 - **Any airport:** add it to `config/airports.yaml`; trained on one hub and tested on the other, the model keeps
   most of its skill.
 """)
+    for doc in ["SOURCES.md", "ASSUMPTIONS.md"]:
+        path = ROOT / doc
+        with st.expander(f"{doc[:-3].title()} (read from {doc})"):
+            st.markdown(path.read_text(encoding="utf-8") if path.exists() else f"{doc} not found in this checkout.")
     with st.expander("Rebuild everything (scripts, no manual steps)"):
         st.code("python scripts/run_pipeline.py --airports ATL DFW\npython tests/test_leakage.py\n"
                 "python -m src.models.delay.train\npython src/eval/baselines_events.py\n"

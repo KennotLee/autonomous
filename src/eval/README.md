@@ -105,6 +105,8 @@ B3 and P3 v1 fail on **the same two days**.
 - In 2025 test, "tailwind only" accounts for 703 of the 1,458 events that the adverse rule fires on (48%).
 - **Fix:** take the minimum tailwind over both runway ends (the airport picks its runway direction), and separate light rain from convection.
 
+> **Stale v1 files (kept for history, do not quote):** `outputs/metrics/aar_model_vs_baseline.csv`, `aar_cross_airport.csv`, `aar_baseline_*.csv` and the AAR part of `test_set_summary.md` were built at about 13:00–15:11 from P1's old 0.5% hourly sample, which no longer exists. The current AAR numbers are `aar_bts_model_vs_baseline.csv`, re-run on P2's leak-fixed predictions (`19e65a6`).
+
 ### Arrivals per hour (optional AAR): independent check of P2 `19e65a6` (full BTS, leak-fixed)
 `bts_arrivals.py` downloads 31 BTS months (1.64M ATL/DFW arrivals). It rebuilds the hourly landings from BTS's own WheelsOn clock time; P2 uses scheduled arrival + ArrDelay − TaxiIn. `evaluate_aar_bts.py` scores P2's predictions and writes `aar_bts_model_vs_baseline.csv`.
 

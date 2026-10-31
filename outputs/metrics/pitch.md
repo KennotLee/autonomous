@@ -15,8 +15,22 @@ All numbers are measured on the 2025 test set (5,704 ATL/DFW departures and arri
 | 4 | **Demo** | DFW, h = 3: recommendations with the rule that fired and the weather timestamp; flight table with risk, "similar flights were late X% (CI)", cautions, and the ⛔ no-forecast decline; decision logged. Then ATL and h = 12 | trust & traceability |
 | 5 | **Results vs baselines** | PR-AUC: constant 0.132, history 0.189, + month 0.198, weather rule 0.215, **model 0.220**. By h: model 0.219–0.222, flat; rule 0.215 → 0.202. Tie at h = 3, +9% at h = 12 (CI > 0). No gain at ATL. Bonus AAR (arrivals/hour, full BTS): RMSE 6.76 ATL / 8.78 DFW at h = 3, 3.5% / 7.0% below the best schedule baseline; 4–13% below in bad-weather hours | honest evaluation |
 | 6 | **Failure case** | DFW 2025-04-23: 9 of 11 late, model expected about 2; overcast at t − 3h, thunderstorm at 12:00, cause mostly late aircraft. False alarm 2025-05-30: north wind counted as a tailwind on runway 18. How the user knows: "no elevated windows" while live delays rise; the tailwind rule is named | honest evaluation |
-| 7 | **Limitations & next steps** | 0.5% flight sample; observations, not forecasts; one runway heading; no inbound-aircraft delay; alerts on about 1 in 3 flights is too many. Next: TAF/convective forecasts, inbound tail delay, both runway ends, alert budget per shift | honest evaluation |
+| 7 | **Limitations & next steps** | Most misses are calm-weather delays; 2025 ran hotter than training (13.2% vs 10.0%), so risks read low; AI use: no LLM at runtime, built with Claude Code; credit Meteostat (CC BY 4.0). 0.5% flight sample; observations, not forecasts; one runway heading; no inbound-aircraft delay; alerts on about 1 in 3 flights is too many. Next: TAF/convective forecasts, inbound tail delay, both runway ends, alert budget per shift | honest evaluation |
 | 8 | **Impact** | Measured: 49–53% of severe delays flagged 3–12 h ahead, about 1 in 5 alerts right. Today that warning comes at 0 h. The weather rule alone gets about the same at the same alert count, so the value is the early, traceable workflow; the model adds at 12 h | impact |
+
+## Say out loud (checklist)
+- **Assumptions:**
+  - runway headings 080° (ATL) and 180° (DFW), as given by the organisers;
+  - a 1 h weather buffer, because a stamp can precede its METAR by about 52 min (all models use it);
+  - cancelled and diverted flights are not scored;
+  - rates = severe events ÷ scored events.
+- **AI use:** no LLM at runtime. Risk comes from LightGBM, recommendations from explicit rules, and reasons from LightGBM feature contributions. We built it with AI coding assistance (Claude Code); explanatory text was AI-drafted and reviewed by the team.
+- **Where it fails:**
+  - **Calm-weather delays:** late aircraft and airline operations, which our weather features can't see.
+  - **2025 had more delays than training** (13.2% vs 10.0%), so risks read low.
+  - **How the board shows it:** a "tie with the rule" trust line, the calibration chart, and the two failure days.
+- **Any airport:** demo presets are the evaluated ATL/DFW days; hubs, runway headings and defaults come from `config/airports.yaml`.
+- **Credits:** weather data from Meteostat (CC BY 4.0, NOAA ISD). Flights from the US DOT BTS On-Time Performance data; we have **not verified** the BTS licence (it's US government data).
 
 ## Bonus: arrivals per hour (AAR proxy), for slide 5 and Q&A
 These numbers come from an independent P4 check of P2's leak-fixed model (`19e65a6`, weather available at stamp + 1 h).
@@ -46,10 +60,10 @@ These numbers come from an independent P4 check of P2's leak-fixed model (`19e65
 Meet our user: the traffic management coordinator at Atlanta or Dallas–Fort Worth, with the airline duty manager beside them. Every afternoon they decide how many flights the airport can take tonight. Today they cut rates when the storm arrives, often with a ground stop, and by then every fix is expensive.
 
 **[0:20–0:40] Slide 2: Today & cost.**
-The FAA's own training material says ground stops are issued at the time of the constraint. Weather causes up to two-thirds of US airspace delay. A block minute costs an airline about 98 dollars, and airborne holding burns around 35 kilograms of fuel a minute. In 2025, thirteen percent of ATL and DFW flights in our data were more than 45 minutes late.
+FAA training says ground stops are issued at the time of the constraint. Weather causes up to two-thirds of US airspace delay. A block minute costs an airline about 98 dollars, and airborne holding burns around 35 kilograms of fuel a minute. In 2025, thirteen percent of ATL and DFW flights in our data were more than 45 minutes late.
 
 **[0:40–1:05] Slide 3: Data & no leakage.**
-For every departure and arrival at both hubs, we predict the chance of a delay over 45 minutes, three to twelve hours ahead. We only use hourly weather observed at least that early, plus one more hour, because reports land up to 52 minutes after their timestamp. Wind is split into crosswind and tailwind on each runway. Train is 2023 and 2024; test is 2025.
+For every departure and arrival at both hubs, we predict the chance of a delay over 45 minutes, three to twelve hours ahead. We only use hourly weather observed at least that early, plus one more hour, because reports land up to 52 minutes after their timestamp. Our assumptions: runway headings of 80 and 180 degrees for crosswind and tailwind, and cancelled flights are not scored. Train is 2023 and 2024; test is 2025.
 
 **[1:05–1:35] Slide 4: Demo.**
 Here is Dallas, three hours ahead. The board names the time windows at risk, the rule that fired and the weather it used, with its timestamp. Each flight shows its risk, how often similar flights were really late, and a caution when evidence is thin. With no weather in time, it declines to forecast. The coordinator decides, and the decision is logged.
@@ -61,7 +75,7 @@ On 5,704 unseen flights, guessing scores a PR-AUC of 0.13. History reaches 0.19,
 Here is where we fail. On April 23rd at Dallas, nine of eleven flights were badly late, and we expected two. Three hours earlier it was only overcast; the storm formed later, and most of the delay was late aircraft from elsewhere. On May 30th, a north wind counted as a tailwind on runway 18, but Dallas simply turned around.
 
 **[2:25–2:40] Slide 7: Limitations.**
-This is a half-percent sample built on observations, not forecasts. Next: weather forecasts, inbound-aircraft delay, and both runway directions.
+Most misses happen in calm weather, and 2025 ran hotter than our training years, so risks read low; the board shows both. Next: weather forecasts, inbound-aircraft delay, both runway directions. No AI runs at decision time; we built it with Claude Code. Weather data: Meteostat.
 
 **[2:40–3:00] Slide 8: Impact.**
 Measured on 2025, half of all severe delays are flagged three to twelve hours ahead, with one alert in five correct. Today that warning comes at zero hours. The model ranks; the human decides.
