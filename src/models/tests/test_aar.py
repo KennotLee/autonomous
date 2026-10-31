@@ -190,3 +190,40 @@ def test_origin_weather_drops_observations_after_cutoff():
     })
     out = origin_weather(flights, ["KATL"])
     assert out.loc[0, "p2_org_n_wx"] == 1 and out.loc[0, "p2_org_prcp_max"] == 0.0
+
+
+def test_hub_exposure_uses_observed_weather_not_oracle():
+    from src.models.aar_context import add_hub_exposure
+    rows = pd.DataFrame({
+        "icao": "KATL", cfg.TIME: pd.Timestamp("2024-01-01 12:00", tz="UTC"), "h": 3,
+        "sched_arr_count": [2.0, 2.0, 3.0], "coco": [2.0, 25.0, 15.0], "prcp_mm": [0.0, 5.0, 0.0],
+        "wspd_kt": [5.0, 10.0, 5.0], "crosswind_kt": [16.0, 0.0, 0.0],
+        "oracle_coco": [27.0, 1.0, 1.0],  # must be ignored
+    })
+    out = add_hub_exposure(rows)
+    assert list(out.p2_hub_bad) == [1.0, 1.0, 1.0]       # crosswind / thunderstorm / snow
+    assert list(out.p2_hub_severe) == [0.0, 1.0, 1.0]
+    assert list(out.p2_hub_winter) == [0.0, 0.0, 1.0]
+    assert list(out.p2_sched_x_hub_severe) == [0.0, 2.0, 3.0]
+    pd.testing.assert_frame_equal(out.drop(columns="oracle_coco"),
+                                  add_hub_exposure(rows.assign(oracle_coco=1.0)).drop(columns="oracle_coco"))
+
+
+def test_origin_counts_for_previous_hour_respect_cutoff():
+    t = pd.Timestamp("2024-03-01 12:00", tz="UTC")
+    flights = pd.DataFrame({
+        "dest_icao": "KATL", "sched_arr_utc": [t - pd.Timedelta(minutes=30), t + pd.Timedelta(minutes=10)], "h": 3,
+        "origin_feature_obs_time": [t - pd.Timedelta(hours=4), t - pd.Timedelta(hours=3)],
+        "origin_prcp_mm": 0.0, "origin_prcp_sum_3h_mm": 0.0, "origin_wspd_kt": 5.0,
+        "origin_wspd_max_3h_kt": 5.0, "origin_coco": [25.0, 2.0],
+    })
+    out = origin_weather(flights, ["KATL"]).set_index(cfg.TIME)
+    assert out.loc[t, "p2_org_severe_n_m1"] == 1 and out.loc[t, "p2_org_severe_n"] == 0
+
+
+def test_metrics_weather_breakdown():
+    preds = pd.DataFrame({"split": "test", "icao": "KATL", "h": 3, "y_true": [1.0, 0.0, 2.0],
+                          "p": [1.0, 0.0, 0.0], "wx": ["normal", "normal", "severe"]})
+    m = evaluate(preds, {"m": "p"}, weather_col="wx")
+    sev = m[(m.weather == "severe") & (m.icao == "ALL")]
+    assert sev.n.item() == 1 and sev.rmse.item() == 2.0

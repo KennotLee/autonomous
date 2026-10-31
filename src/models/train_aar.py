@@ -11,11 +11,12 @@ import json
 from pathlib import Path
 
 import lightgbm as lgb
+import numpy as np
 import pandas as pd
 
 from . import aar_config as cfg
 from .aar_baselines import HistoricalAverage, persistence
-from .aar_context import add_context
+from .aar_context import BAD_CROSSWIND_KT, add_context, weather_flags
 from .aar_data import check, load_airport_timezones, load_hourly, split_chronological, validate_hourly
 from .aar_features import AARPreprocessor
 from .aar_metrics import evaluate
@@ -47,7 +48,23 @@ def _predict_frame(split_name, df, booster, pre, hist, panel) -> pd.DataFrame:
     out["pred_lgbm"] = booster.predict(pre.transform(df)).clip(min=0)  # counts cannot be negative
     out["pred_persistence"], _ = persistence(df, panel)
     out["pred_hist_avg"] = hist.predict(df)
+    out["hub_weather_actual"] = actual_weather_category(df)
     return out
+
+
+def actual_weather_category(df: pd.DataFrame) -> pd.Series:
+    """normal / bad / severe from the weather that actually occurred at the hub in hour t.
+
+    Uses oracle_* columns for EVALUATION GROUPING ONLY (they are never model inputs), so the
+    scores show how each model does when weather really was bad.
+    """
+    cols = ["oracle_coco", "oracle_prcp_mm", "oracle_wspd_kt"]
+    if not set(cols) <= set(df.columns):
+        return pd.Series("unknown", index=df.index)
+    bad, severe, _ = weather_flags(df["oracle_coco"], df["oracle_prcp_mm"], df["oracle_wspd_kt"])
+    if "oracle_crosswind_kt" in df:
+        bad = bad.where(~(df["oracle_crosswind_kt"] >= BAD_CROSSWIND_KT), 1.0)
+    return pd.Series(np.select([severe == 1, bad == 1], ["severe", "bad"], "normal"), index=df.index)
 
 
 def run(data_path: Path = cfg.HOURLY_FEATURES, out_dir: Path = cfg.PRED_DIR, refit: bool = True) -> pd.DataFrame:
@@ -56,7 +73,8 @@ def run(data_path: Path = cfg.HOURLY_FEATURES, out_dir: Path = cfg.PRED_DIR, ref
     report = validate_hourly(panel, timezones)
     check(report)
 
-    # Neighbouring-hour schedule from the full grid. Origin weather is left out: no validation gain.
+    # Neighbouring-hour schedule and hub weather exposure from the full grid. Origin-airport weather
+    # is left out: no gain in bad-weather hours on validation (see ablation_aar.py).
     labelled = add_context(panel.dropna(subset=[cfg.TARGET]), panel, flights=None)
     splits = split_chronological(labelled)
     sizes = {k: int(len(v)) for k, v in splits.items()}
@@ -81,7 +99,7 @@ def run(data_path: Path = cfg.HOURLY_FEATURES, out_dir: Path = cfg.PRED_DIR, ref
         print("WARNING: no 2025 rows; test metrics not produced")
 
     preds = pd.concat(frames, ignore_index=True)
-    metrics = evaluate(preds, MODEL_COLS)
+    metrics = evaluate(preds, MODEL_COLS, weather_col="hub_weather_actual")
 
     out_dir = Path(out_dir)
     model_dir = out_dir / cfg.MODEL_SUBDIR
@@ -107,8 +125,12 @@ def run(data_path: Path = cfg.HOURLY_FEATURES, out_dir: Path = cfg.PRED_DIR, ref
     preds.to_csv(out_dir / cfg.PREDS_FILE, index=False)
     metrics.to_csv(out_dir / cfg.METRICS_FILE, index=False)
 
-    summary = metrics[(metrics.icao != "ALL") & (metrics.h == "ALL")]
+    summary = metrics[(metrics.icao != "ALL") & (metrics.h == "ALL") & (metrics.weather == "ALL")]
     print(summary.pivot_table(index=["split", "icao"], columns="model", values=["rmse", "mae"]).round(3))
+    wx = metrics[(metrics.split == "test") & (metrics.icao == "ALL") & (metrics.weather != "ALL")]
+    if len(wx):
+        print("test RMSE by actual hub weather:")
+        print(wx.pivot_table(index=["weather"], columns="model", values="rmse").round(3))
     print(f"saved model to {model_dir}, predictions and metrics to {out_dir}")
     return metrics
 
