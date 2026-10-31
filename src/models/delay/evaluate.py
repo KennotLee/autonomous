@@ -15,7 +15,24 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, brier_score_loss
 
-from .train import MET_DIR, MODEL_DIR, X, choose_threshold, feature_cols, fit, prepare
+from .train import MET_DIR, MODEL_DIR, ROOT, X, choose_threshold, feature_cols, fit, prepare
+
+# organiser hourly weather (the file P1's weather features come from); used only for the true oracle
+HOURLY = ROOT / "data" / "original_datasets" / "challenge5_hourly_weather_ATL_DFW.csv"
+TRUE_ORACLE = {"temp_c": "temp", "precip_mm": "prcp", "wind_speed_kmh": "wspd", "pressure_hpa": "pres",
+               "condition_code": "coco", "wind_dir_deg": "wdir", "headwind_kmh": "headwind",
+               "crosswind_kmh": "crosswind", "tailwind_kmh": "tailwind"}
+
+
+def add_true_oracle(df: pd.DataFrame) -> pd.DataFrame:
+    """Event-airport weather at the event's own UTC hour, floor(sched_time_utc): never
+    known 3-12 h ahead, so it only measures what leakage would fake."""
+    w = pd.read_csv(HOURLY, parse_dates=["time_utc"])
+    w = w.assign(airport="K" + w.airport, _hour=w.time_utc.dt.tz_localize("UTC"))
+    w = w[["airport", "_hour"] + list(TRUE_ORACLE)].rename(columns={k: f"true_oracle_{v}" for k, v in TRUE_ORACLE.items()})
+    w["true_oracle_ts_flag"] = w.true_oracle_coco.isin([25, 26, 27]).astype(float).where(w.true_oracle_coco.notna())
+    out = df.assign(_hour=df.sched_time_utc.dt.floor("h")).merge(w, on=["airport", "_hour"], how="left")
+    return out.drop(columns="_hour").set_index(df.index)
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -55,6 +72,7 @@ def scores(y, p, thr):
 
 def main():
     ev, lab, cats = prepare()
+    lab = add_true_oracle(lab)
     meta = json.loads((MODEL_DIR / "meta.json").read_text())
     thr, cols = meta["threshold"], meta["features"]
     model = lgb.Booster(model_file=str(MODEL_DIR / "gbm.txt"))
@@ -99,14 +117,18 @@ def main():
     plt.close(fig)
     print("calibration bins:\n" + b.round(3).to_string())
 
-    # ---- oracle gap: same model, same-time weather instead of the lagged weather
-    ocols = feature_cols(ev, oracle=True)
-    om = fit(tr, va, ocols, cats)
-    te["p_oracle"] = om.predict_proba(X(te, ocols, cats))[:, 1]
+    # ---- oracle gap: same model, all lagged event-airport weather replaced by weather at the event hour
+    # (true oracle, organiser file); P1's oracle_* shown for comparison (it is ~4-6 h before the event)
+    pcols = feature_cols(ev, oracle=True)
+    tcols = [c for c in pcols if not c.startswith("oracle_")] + [c for c in lab.columns if c.startswith("true_oracle_")]
+    print(f"true-oracle weather found for {te.true_oracle_temp.notna().mean():.2%} of test rows")
+    for name, oc in (("p1_oracle", pcols), ("true_oracle", tcols)):
+        te[f"p_{name}"] = fit(tr, va, oc, cats).predict_proba(X(te, oc, cats))[:, 1]
     gap = pd.DataFrame([{"h": h, "pr_auc_lagged": average_precision_score(g.label_45, g.p_gbm),
-                         "pr_auc_oracle": average_precision_score(g.label_45, g.p_oracle)}
+                         "pr_auc_true_oracle": average_precision_score(g.label_45, g.p_true_oracle),
+                         "pr_auc_p1_oracle": average_precision_score(g.label_45, g.p_p1_oracle)}
                         for h, g in [("all", te)] + list(te.groupby("h"))])
-    gap["gap"] = gap.pr_auc_oracle - gap.pr_auc_lagged
+    gap["gap_true_oracle"] = gap.pr_auc_true_oracle - gap.pr_auc_lagged
     gap.to_csv(MET_DIR / "oracle_gap.csv", index=False, float_format="%.4f")
 
     # ---- generalisation: train on one airport, test on the other (airport is constant -> dropped)
@@ -153,11 +175,15 @@ def main():
 
     (MET_DIR / "notes.md").write_text(
         "# Notes on the metrics\n\n"
-        "- **Oracle gap is not a leakage ceiling.** P1's `oracle_*` = flights-CSV weather. Checked against the "
-        "organiser hourly file: it matches the true event hour (UTC) in ~5% of rows but the *local hour read as "
-        "UTC* in ~44% (the misaligned upstream join in CLAUDE.md), i.e. it is weather from ~4-6 h before the event. "
-        "So `oracle_gap.csv` compares lagged weather with other lagged weather; the small gap does not show what "
-        "true same-time weather would fake.\n"
+        "- **Oracle gap uses the true event-hour weather.** `pr_auc_true_oracle` = same model with all lagged "
+        "event-airport weather replaced by the organiser hourly file at floor(sched_time_utc) (the file P1's weather "
+        "features come from; checked 100% equal on all 9 weather columns). P1's `oracle_*` (`pr_auc_p1_oracle`) is "
+        "not event-time weather: it matches the event hour in ~5% of rows and the *local hour read as UTC* in ~44% "
+        "(the misaligned upstream join in CLAUDE.md), i.e. ~4-6 h before the event.\n"
+        "- **Why the gap is small:** event-hour weather matters a lot per flight (thunderstorm coded: 37.7% severe "
+        "vs 10.6%; >= 2.5 mm/h rain: 28.5% vs 10.4%) but it is rare (61 thunderstorm and ~1.4% heavy-rain events "
+        "out of 25,231), so it barely moves an all-events PR-AUC. Test PR-AUC: no event-airport weather 0.207, "
+        "lagged weather 0.219, event-hour weather 0.221.\n"
         f"- **Weather rule** cut-offs were chosen by max F1 on train; with a weak signal that lands on loose "
         f"cut-offs (crosswind >= {rc:.1f}, tailwind >= {rt:.1f} km/h) and flags about half of all events.\n"
         "- **Generalisation** models drop `airport` (constant in training).\n")
