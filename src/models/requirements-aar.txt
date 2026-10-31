@@ -1,0 +1,3 @@
+# P2 additions on top of the shared requirements.txt (owned by P1; ask P1 to merge these in).
+lightgbm
+pytest
