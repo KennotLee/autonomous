@@ -230,4 +230,4 @@ C2. Join weather on UTC (time_local has DST duplicates/gaps); flight local → U
 C3. Hourly row available at time_utc + 1 h (stamp can precede the METAR by ~52 min); as-of ≤ t − h, tolerance 2 h.
 C4. Units kept as provided (km/h); coco flags use the data-guide groups; gust/snow placeholders ignored.
 C5. Optional AAR kept by P2 using full BTS (organiser: 'may pull the full BTS on-time data automatically'); the delay model
-    (P3) uses only P1's event_features. pipeline/, root run_pipeline.py, tests/test_pipeline_leakage.py, reports/ deleted (unused).
+    (P3) uses only P1's event_features. All models use the same weather timing rule (row available at time_utc + 1 h). pipeline/, root run_pipeline.py, tests/test_pipeline_leakage.py, reports/ deleted (unused).
