@@ -29,21 +29,21 @@ Flagged (risk >= the airport's threshold) but delay <= 45 min; one row per event
 - feature_obs_time 2025-05-19 19:00:00+00:00: temp=28.3, prcp=0.1, wspd=37, pres=1e+03, coco=8, crosswind=12.7, tailwind=0, ts_flag=0
 - oracle: oracle_temp=26.7, oracle_prcp=0, oracle_wspd=24.1, oracle_pres=1e+03, oracle_coco=8
 - top drivers: carrier=F9; coco=8; hour=17
-- likely reason: adverse weather was visible at feature_obs_time (condition code 8 (rain or worse)) and pushed the risk up (top drivers: carrier=F9; coco=8; hour=17), but the event ran only 6 min late
+- likely reason: adverse weather was visible at feature_obs_time (condition code 8 (rain or worse)) and pushed the risk up (top drivers: carrier=F9; coco=8; hour=17), but the event was not severely delayed (delay +6 min)
 
 ## 2025-04-23_AA1092_DFW_ELP_dep (h = 3)
 - scheduled 2025-04-23 20:40:00 local (2025-04-24 01:40:00+00:00 UTC), dep at KDFW, carrier AA; delay -2 min; predicted risk 0.441 (threshold 0.123)
 - feature_obs_time 2025-04-23 22:00:00+00:00: temp=26.1, prcp=0, wspd=16.6, pres=1.01e+03, coco=18, crosswind=14.4, tailwind=0, ts_flag=0
 - oracle: oracle_temp=26.1, oracle_prcp=0, oracle_wspd=20.5, oracle_pres=1.01e+03, oracle_coco=7
 - top drivers: hour=20; coco=18; carrier=AA
-- likely reason: adverse weather was visible at feature_obs_time (condition code 18 (rain or worse)) and pushed the risk up (top drivers: hour=20; coco=18; carrier=AA), but the event ran only -2 min late
+- likely reason: adverse weather was visible at feature_obs_time (condition code 18 (rain or worse)) and pushed the risk up (top drivers: hour=20; coco=18; carrier=AA), but the event was not severely delayed (delay -2 min)
 
 ## 2025-06-04_AA2708_DFW_LGA_dep (h = 12)
 - scheduled 2025-06-04 19:01:00 local (2025-06-05 00:01:00+00:00 UTC), dep at KDFW, carrier AA; delay 2 min; predicted risk 0.439 (threshold 0.123)
 - feature_obs_time 2025-06-04 12:00:00+00:00: temp=19, prcp=0, wspd=24, pres=1.01e+03, coco=8, crosswind=12, tailwind=20.8, ts_flag=0
 - oracle: oracle_temp=23.3, oracle_prcp=0, oracle_wspd=18.4, oracle_pres=1.01e+03, oracle_coco=4
 - top drivers: hour=19; carrier=AA; coco=8
-- likely reason: adverse weather was visible at feature_obs_time (condition code 8 (rain or worse)) and pushed the risk up (top drivers: hour=19; carrier=AA; coco=8), but the event ran only 2 min late
+- likely reason: adverse weather was visible at feature_obs_time (condition code 8 (rain or worse)) and pushed the risk up (top drivers: hour=19; carrier=AA; coco=8), but the event was not severely delayed (delay +2 min)
 
 # Alert workload (test 2025, per-airport thresholds)
 

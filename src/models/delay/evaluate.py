@@ -250,7 +250,7 @@ def main():
                                (f"rain {r.prcp:.1f} mm", r.prcp >= HEAVY_RAIN_MM),
                                (f"crosswind {r.crosswind:.0f} km/h", r.crosswind >= cw)) if ok]
         reason = (f"adverse weather was visible at feature_obs_time ({', '.join(bad)}) and pushed the risk up "
-                  f"(top drivers: {r.top_drivers}), but the event ran only {r.delay_min:.0f} min late" if bad else
+                  f"(top drivers: {r.top_drivers}), but the event was not severely delayed (delay {r.delay_min:+.0f} min)" if bad else
                   f"no adverse weather at feature_obs_time; the risk came from the top drivers ({r.top_drivers})")
         lines += [f"## {r.event_id} (h = {r.h})",
                   f"- scheduled {r.sched_time_local} local ({r.sched_time_utc} UTC), {r.event_type} at {r.airport}, "
