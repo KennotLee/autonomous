@@ -62,7 +62,11 @@ To rebuild everything from the raw files, see the commands in the app's **How it
    - Click **✅ Log my decisions** (above the table).
    - Each decision is saved to `app/decision_log.csv` (gitignored) with your name, risk, threshold, weather time and model version. See **Decision log** under the table. Nothing happens automatically.
 4. **Check it (optional):**
-   - Turn on **Replay: show what actually happened** to add the real outcomes and the actual late rate.
+   - Turn on **Replay: show what actually happened** to add the actual late rate. Two columns appear right after **risk**:
+     - **actual:** 🟥 red = LATE (> 45 min), 🟩 green = on time, grey = cancelled or diverted;
+     - **alert right?:** ✅ caught (alerted and late), ❌ missed (late but no alert) or ⚠ false alarm (alerted, not late).
+
+     The risks themselves don't change; they are what the model said in advance.
    - **Settings → Alert at risk ≥** changes the alert threshold. Its default is tuned per airport on 2024 validation data.
 
 ## Tabs

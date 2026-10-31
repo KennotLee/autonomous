@@ -320,13 +320,25 @@ with tabs[0]:
             "weather used (obs ≤ t−h)": order["weather"],
             "caution": caution,
             "note": ""})
-        if reveal:
-            view["outcome"] = np.select(
-                [order["cancelled"] == 1, order["diverted"] == 1, order["label_45"] == 1, order["label_45"] == 0],
-                ["cancelled", "diverted", "LATE " + order["delay_min"].round().astype("Int64").astype(str) + " min",
-                 "on time (" + order["delay_min"].round().astype("Int64").astype(str) + " min)"], "—")
+        if reveal:  # actual outcome next to the risk, plus whether the alert was right
+            mins = order["delay_min"].round().astype("Int64").astype(str)
+            late, alerted = order["label_45"] == 1, order["risk_prob"] >= thr
+            outcome = np.select([order["cancelled"] == 1, order["diverted"] == 1, late, order["label_45"] == 0],
+                                ["cancelled", "diverted", "LATE " + mins + " min", "on time (" + mins + " min)"], "—")
+            verdict = np.select([late & alerted, late & ~alerted, (order["label_45"] == 0) & alerted],
+                                ["✅ caught", "❌ missed", "⚠ false alarm"], "")
+            view.insert(view.columns.get_loc("alert") + 1, "actual", outcome)
+            view.insert(view.columns.get_loc("actual") + 1, "alert right?", verdict)
         if not any(caution):
             view = view.drop(columns="caution")
+        cols = list(view.columns)
+        if reveal:
+            colour = {"LATE": "background-color: #f8d7da; color: #842029; font-weight: 600",
+                      "on time": "background-color: #d1e7dd; color: #0f5132",
+                      "cancelled": "background-color: #e2e3e5; color: #41464b",
+                      "diverted": "background-color: #e2e3e5; color: #41464b"}
+            view = view.style.map(lambda v: next((css for k, css in colour.items() if str(v).startswith(k)), ""),
+                                  subset=["actual"])
         b1, b2 = st.columns([1, 4])
         log_clicked = b1.button("✅ Log my decisions", type="primary")
         b2.caption("Pick **Act / Watch / Override** in the first column (add a note if you like), then log. "
@@ -334,7 +346,7 @@ with tabs[0]:
         log_msg = st.container()
         edited = st.data_editor(
             view, hide_index=True, width="stretch", key=f"ed_{icao}_{day}_{h}",
-            disabled=[c for c in view.columns if c not in ("decision", "note")],
+            disabled=[c for c in cols if c not in ("decision", "note")],
             column_config={
                 "event_id": None,
                 "risk": st.column_config.ProgressColumn("risk", min_value=0, max_value=1, format="percent"),
