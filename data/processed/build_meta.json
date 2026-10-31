@@ -1,0 +1,32 @@
+{
+ "validation": {
+  "rows_hub": 25299,
+  "dst_unresolved_sched_dep": 0,
+  "unmapped_airports": 0,
+  "sched_arr_vs_CRS_ARR_TIME": [
+   0.9999,
+   25299
+  ],
+  "gate_arr_vs_ARR_TIME": [
+   1.0,
+   24876
+  ],
+  "wheels_on_vs_WHEELS_ON": [
+   1.0,
+   24876
+  ]
+ },
+ "weather_scope": "hubs",
+ "hubs": [
+  "KATL",
+  "KDFW"
+ ],
+ "hourly_shape": [
+  181048,
+  52
+ ],
+ "flight_shape": [
+  101196,
+  97
+ ]
+}

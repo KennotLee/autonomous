@@ -8,7 +8,7 @@ Out of scope for P1: splits, models, baselines, metrics, dashboard.
 ## Layout
 - `data/raw/Flight_Data_With_Weather_Final.csv` — raw copy (from ~/Downloads). Never edit.
 - `data/sample/sample_1000.csv` — first 1,000 raw rows (all airports, unfiltered). Committed.
-- `data/schema_profile.csv` — per-column profile (dtype, % missing, min/max, examples). Not committed.
+- `data/interim/schema_profile.csv` — per-column profile (dtype, % missing, min/max, examples). Not committed.
 - `config/airports.yaml` — per-ICAO runway heading, timezone, meteostat lookup. `src/data/` — P1 pipeline code.
 - `scripts/` — profiling scripts + `run_pipeline.py` entry. Env: `.venv/bin/python`; `pip install -r requirements.txt`.
 - Repo: https://github.com/KennotLee/autonomous (main). Team workflow rules in README.md.
@@ -136,5 +136,24 @@ Weather meanings/units are from Meteostat docs; the "@ (date, sched local hr)" j
 | snow_DEST | float64 | mm | 0.0 | Snow depth; 100% zeros -> no information @ dest airport, @ (date, sched local hr) misaligned |
 | coco_DEST | float64 | code | 0.0 | Meteostat weather condition code 1-27; 0.8% zeros = likely filled NaN @ dest airport, @ (date, sched local hr) misaligned |
 
-## Decisions log
-(pending answers to P1 questions, see chat)
+## Decisions log (approved by team lead 2026-10-31)
+1. Weather source = Meteostat hourly (UTC) per ICAO, NOT the CSV weather columns (misaligned 4–6 h).
+2. Numeric weather from model=False (observations only); `coco` only from model=True (model-filled).
+3. UTC: sched_dep_utc = FL_DATE+CRS_DEP_TIME localised in origin tz; sched_arr_utc = sched_dep_utc +
+   CRS_ELAPSED_TIME; actual gate arr = sched_arr_utc + ARR_DELAY; wheels_on_utc = gate arr − TAXI_IN.
+   Validated against local hhmm columns. Time zones from Meteostat station metadata.
+4. arr_count = non-cancelled, non-diverted arrivals by floor(wheels_on_utc, hour), full hourly grid, 0-filled.
+   sched_arr_count by floor(sched_arr_utc) incl. cancelled. capacity_ratio NaN when sched_arr_count = 0.
+5. delay_min = ARR_DELAY (signed); label_45 = delay_min > 45; cancelled/diverted kept with NaN labels +
+   `cancelled`, `diverted` columns.
+6. Flight t = sched_time_utc = scheduled departure UTC; origin_* and dest_* both as-of t − h;
+   feature_obs_time = max(origin, dest obs time).
+7. Weather fetched for every airport on ATL/DFW flights; wind components only where a runway heading
+   is configured (KATL, KDFW), NaN elsewhere.
+8. snow dropped; missing gust left NaN (no imputation).
+9. Meteostat stamp HH:00 = obs time; feature allowed iff stamp ≤ t − h; as-of tolerance 2 h (else NaN).
+10. Rolling windows 3 h and 6 h ending at the obs time: max gust, max wspd, prcp sum, pressure change.
+11. wdir = meteorological "from"; runway headings 080/180 used as given (no magnetic correction).
+A. Duplicate sample removed; schema_profile.csv → data/interim/.
+B. Prediction CSVs: aar_preds.csv (icao, target_hour_utc, h, pred_arr_count);
+   delay_preds.csv (flight_id, sched_time_utc, h, p_delay45).
