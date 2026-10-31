@@ -589,7 +589,7 @@ with tabs[5]:
             st.altair_chart(layers.properties(height=280), width="stretch")
             st.caption("Red = forecast, shaded = P10–P90 band, dashed = schedule baseline"
                        + (", black dots = actual" if reveal else "") + ". Realised arrivals are an AAR *proxy* "
-                       "(the smaller of demand and capacity), not the FAA rate.")
+                       "(the smaller of demand and capacity), not the FAA rate. P4 check: P2 beats the best schedule baseline by 2–8% overall and 6–26% in bad/severe-weather hours; band covers 69–74% (nominal 80%).")
         tbl = PRED / "aar_metrics_table.md"
         if tbl.exists():
             with st.expander("RMSE vs baselines, 2025 test (P2-reported)"):

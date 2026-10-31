@@ -49,6 +49,8 @@ Events are departures from ATL/DFW (DEP_DELAY > 45) and arrivals at ATL/DFW (ARR
 python src/eval/baselines_events.py [--events <parquet>]     # B0-B3 -> event_baseline_metrics.csv, outputs/predictions/event_baseline_preds.csv
 python src/eval/evaluate_events.py --preds <csv> --name <tag>  # model vs best baseline -> event_model_vs_baseline_<tag>.csv, event_calibration_<tag>.csv
 python src/eval/failure_cases.py [--preds <csv> --name <tag>]  # missed storm + false alarm -> failure_cases_<tag>.md (default B3)
+python src/eval/bts_arrivals.py download && python src/eval/bts_arrivals.py hourly   # full BTS -> independent hourly arrivals
+python src/eval/evaluate_aar_bts.py --preds <p2 aar_preds.csv>  # -> aar_bts_model_vs_baseline.csv
 ```
 
 **Baselines, h = 3, all test events** (top 15% = 856 flags):
@@ -102,6 +104,27 @@ B3 and P3 v1 fail on **the same two days**.
 - Evidence across all events: "tailwind only" triggers have a delay rate of 0.135 in train and 0.145 in test. That is close to normal weather (0.087 / 0.117) and far below fog/rain codes (0.153 / 0.202) and thunderstorms (0.348 / 0.300).
 - In 2025 test, "tailwind only" accounts for 703 of the 1,458 events that the adverse rule fires on (48%).
 - **Fix:** take the minimum tailwind over both runway ends (the airport picks its runway direction), and separate light rain from convection.
+
+### Arrivals per hour (optional AAR): independent check of P2 `730484a` (full BTS)
+`bts_arrivals.py` downloads 31 BTS months (1.64M ATL/DFW arrivals). It rebuilds the hourly landings from BTS's own WheelsOn clock time; P2 uses scheduled arrival + ArrDelay − TaxiIn. `evaluate_aar_bts.py` scores P2's predictions and writes `aar_bts_model_vs_baseline.csv`.
+- **P2's target is correct:** it equals P4's on 99.4% of 2025 hours and is within ±1 on 100%. Mean is 34.98 arrivals per hour in both.
+- **Stronger baseline:** `sched_spread` spreads the published schedule over the 2023–24 distribution of landing-hour offsets for each airport × local hour. It includes the not-landed share and uses no information from t − h. RMSE: KATL 7.01 and KDFW 9.44, against P2's best baselines of 8.68 and 10.68.
+
+| icao | h | P2 model | sched_spread | P2's best baseline | vs sched_spread (90% CI of RMSE diff) |
+|---|---|---|---|---|---|
+| KATL | 3 | 6.70 | 7.01 | 8.68 | −4.4% [−0.60, −0.07] |
+| KATL | 12 | 6.84 | 7.01 | 8.68 | −2.4% [−0.38, +0.01] |
+| KDFW | 3 | 8.68 | 9.44 | 10.68 | −8.0% [−1.15, −0.39] |
+| KDFW | 12 | 9.07 | 9.44 | 10.68 | −3.9% [−0.63, −0.10] |
+
+- **The honest headline is −2% to −8% vs reading the schedule well,** not the −15% to −23% P2 reports against weaker baselines. At KATL the gain is significant only at h = 3.
+- **The value is in bad weather.** These slices use P2's oracle label for the target hour, for slicing only:
+  - in hours with **bad** weather the model is 6–16% better than `sched_spread`, with every CI below 0;
+  - in hours with **severe** weather it is 8–26% better;
+  - in normal-weather hours at KATL it is slightly *worse* (+0.9% to +2.5%).
+  So it is learning the weather-driven drop in capacity, which is what the challenge asks for.
+- **The P10–P90 band is too narrow.** Coverage is 69–74% overall against a nominal 80%, and 43–56% in severe hours.
+- **Caveat:** P2 uses the weather row stamped exactly t − h, which holds a METAR from about 52 minutes later (see the leakage review). That could slightly inflate the h = 3 weather gain. Fix: use row t − h − 1, as P1 does.
 
 ### Leakage review v2 (P1 `b064886`, P3 v1 `b27ba59`): no leak found
 | file:line | check | result |
