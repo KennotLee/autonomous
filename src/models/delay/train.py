@@ -8,7 +8,8 @@ threshold, max F1), test 2025. Events with label_45 NaN (cancelled, diverted
 arrivals) are not trained or scored. No class reweighting, so probabilities stay
 calibrated; the imbalance is handled by the threshold.
 
-Output: outputs/predictions/delay_preds.csv = event_id, h, risk_prob, top_drivers
+Output: outputs/predictions/delay_preds.csv = event_id, airport, event_type, sched_time_utc, h,
+risk_prob, high_risk, top_drivers (schema: outputs/predictions/SCHEMA.md)
 for every 2025 row of event_features (join coverage asserted 100%).
 """
 import io
@@ -139,9 +140,10 @@ def main():
 
     te = ev[ev.split == "test"].reset_index(drop=True)
     xt = X(te, cols, cats)
-    out = pd.DataFrame({"event_id": te.event_id, "h": te.h,
-                        "risk_prob": m.predict_proba(xt)[:, 1].round(4),
-                        "top_drivers": top_drivers(m, xt)})
+    risk = m.predict_proba(xt)[:, 1]
+    out = pd.DataFrame({"event_id": te.event_id, "airport": te.airport, "event_type": te.event_type,
+                        "sched_time_utc": te.sched_time_utc, "h": te.h, "risk_prob": risk.round(4),
+                        "high_risk": (risk >= thr).astype(int), "top_drivers": top_drivers(m, xt)})
     # join coverage with P1's file must be exact, both ways
     p1_test = ev.loc[ev.split == "test", ["event_id", "h"]]
     j = p1_test.merge(out[["event_id", "h"]], how="outer", indicator=True)

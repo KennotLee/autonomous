@@ -19,7 +19,7 @@ Every column except keys (`event_id`, `flight_key`, `sched_time_local`, `sched_t
 - No class reweighting, which keeps probabilities calibrated for the Brier score and reliability curve. Imbalance is handled by the decision threshold, set to max F1 on validation.
 
 ## Outputs
-- `outputs/predictions/delay_preds.csv`: columns `event_id`, `h`, `risk_prob`, `top_drivers`, for every 2025 row of `event_features` (join coverage asserted 100%).
+- `outputs/predictions/delay_preds.csv`: columns `event_id`, `airport`, `event_type`, `sched_time_utc`, `h`, `risk_prob`, `high_risk`, `top_drivers` (see `outputs/predictions/SCHEMA.md`), for every 2025 row of `event_features` (join coverage asserted 100%).
   - `top_drivers`: up to 3 features pushing risk up, from LightGBM `pred_contrib`, formatted `feature=value` and joined by `; `.
 - `src/models/delay/artifacts/`: `gbm.txt` (model) and `meta.json` (threshold and feature list).
 - `outputs/metrics/`: `metrics.csv`, `threshold.md`, `calibration.png`, `oracle_gap.csv`, `generalisation.csv`, `failure_cases.md`.
