@@ -9,3 +9,4 @@ scikit-learn
 matplotlib
 requests
 tabulate
+streamlit
