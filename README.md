@@ -77,7 +77,11 @@ Outputs (already committed on branch `p1`, no need to rebuild): column-by-column
 8. **Never use as features:** `oracle_*` (same-hour weather), `arr_count`, `mean_arr_delay`, `share_delayed_45`,
    `cancellations`, `diversions`, `capacity_ratio`, `delay_min`, `label_45`, `cancelled`, `diverted`.
    `sched_arr_count` (schedule) is known in advance and may be used. Either filter to one `h` per model or use `h` as a feature.
-9. **Data window:** 2023-01-01 to 2025-07-31 (2025 is partial). Weather at t − h uses the last obs hour
+9. **A few suspect wind readings (raw Meteostat, left as-is):** only 9 of ~45k hub-hours have sustained wind
+   ≥ 30 kt. Some are real storms (e.g. KDFW 2024-05-28, 48 kt, thunderstorm), but at least two look like data
+   errors: KATL 2025-03-21 02:00 UTC (46.7 kt, fair weather, no rain) and KDFW 2025-06-09 04:00 UTC (45 kt
+   sustained with a 15 kt gust). They feed `wspd_kt` and the wind components; tree models are barely affected.
+10. **Data window:** 2023-01-01 to 2025-07-31 (2025 is partial). Weather at t − h uses the last obs hour
    ≤ t − h, tolerance 2 h.
 
 ## 🗂️ Layout

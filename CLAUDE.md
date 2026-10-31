@@ -47,7 +47,7 @@ Out of scope for P1: splits, models, baselines, metrics, dashboard.
 import pandas as pd
 hr = pd.read_parquet("data/processed/hourly_features.parquet")   # 181,048 rows = 2 icao × 22,631 h × 4 horizons
 fl = pd.read_parquet("data/processed/flight_features.parquet")   # 101,196 rows = 25,299 flights × 4 horizons
-X = hr[hr.h == 6]   # pick ONE horizon per model; never train on oracle_* columns or target columns
+X = hr[hr.h == 6]   # filter to one h, or keep all h and use h as a feature; never train on oracle_* or target columns
 ```
 Rebuild: `.venv/bin/python scripts/run_pipeline.py --icao KATL KDFW --start 2023-01-01 --end 2025-07-31 [--weather-scope all]`
 then `.venv/bin/python tests/test_leakage.py` (must print ALL LEAKAGE CHECKS PASSED). All timestamps are tz-aware UTC.
