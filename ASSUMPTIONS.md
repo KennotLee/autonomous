@@ -48,7 +48,7 @@ CLAUDE.md lines 3–9) or *ours* (team decision). "Impact if wrong" is our estim
     - Where: `config/airports.yaml:31`; `src/data/hourly_weather.py`.
     - Given by: organiser.
 11. **The flights CSV's weather is used only as `oracle_*`.**
-    - Why: it is attached at flight time.
+    - Why: the organisers say it is attached at flight time; in fact that join reads the local clock hour as UTC, so it is ~4–6 h before the event (CLAUDE.md). It is never a feature.
     - Where: `src/data/events.py:18,63-64`; `tests/test_leakage.py` (`test_forbidden_columns`).
     - Given by: organiser.
 12. **Units are kept as provided:** °C, mm, km/h, hPa; wind direction FROM, degrees true; headwind/crosswind/tailwind as computed by the organisers.
@@ -69,21 +69,25 @@ CLAUDE.md lines 3–9) or *ours* (team decision). "Impact if wrong" is our estim
     - Where: `src/data/config.py:34-42`; `config/airports.yaml:19-27`.
     - Given by: ours. Label only; no weather depends on it except ATL/DFW.
 
-## 🤖 Models (need updating to v2: P2 dropped, P3 must switch to `event_features.parquet`)
+## 🤖 Models
 
-18. **P2 arrivals model** (`src/models/aar_*`): **dropped** per the organiser update (AAR optional). Its assumptions (split dates `aar_config.py:28-29`, Poisson `:62`, weather flags `aar_context.py:25-27`) no longer apply to the submission.
-19. **P3 delay model split:** train before 2024-07-01, validation 2024-07..12, test 2025-01..07.
-    - Where: `src/models/delay/train.py:37-38`.
+18. **P2 arrivals model (optional AAR) uses full BTS data for its target**: realised arrivals per UTC hour by wheels-on time.
+    - Where: `src/models/aar_bts.py:29-33` (download), `src/models/aar_dataset.py` (panel); SOURCES.md #2.
+    - Given by: organiser allows it ("may pull the full BTS on-time data automatically"); the choice is ours (P2).
+    - Note: P2 joins weather on the stamp `time_utc = t − h` (the data guide's literal recipe), while P1/P3 treat a row as available at `time_utc + 1 h`. P2's features can therefore come from a METAR up to ~52 min after t − h. Compliant with the guide's recipe, but less strict than P1/P3.
+19. **P3 delay model split:** train before 2024-07-01, validation 2024-07..12, test 2025-01..07. One model for all horizons (`h` is a feature).
+    - Where: `src/models/delay/train.py` (`split_of`, `TRAIN_END`, `VAL_END`).
     - Given by: ours.
-20. **P3 alert threshold = maximum F1 on validation.**
-    - Where: `src/models/delay/train.py:91-97`.
+20. **P3 alert thresholds are per airport, maximum F1 on validation:** KATL 0.098, KDFW 0.123.
+    - Where: `src/models/delay/artifacts/meta.json` (`thresholds_by_airport`); `outputs/metrics/threshold.md`.
     - Given by: ours.
     - Impact: treats a missed delay and a false alert as equally costly.
-21. **P3 hub state uses only flights completed by t − h** (actual-hour grouping), with full BTS fetched by `pipeline/download.py`.
-    - Where: `pipeline/panel.py:112-116`; SOURCES.md #2.
-    - Given by: ours. Allowed by the organisers ("may pull the full BTS on-time data automatically").
-22. **P3 weather rule baseline** (thunderstorm/heavy-precip code, gust > 25 kt, wind > 20 kt) and **climatology** (shrinkage m = 30).
-    - Where: `src/models/delay/train.py:57-69`.
-    - Given by: ours. Must be re-pointed to the v2 columns (km/h, no gusts).
-23. **P3's older `pipeline/config.py:35-39` hardcodes airports and headings.**
-    - Given by: ours (P3). Conflicts with the "any airport code" rule; should read `config/airports.yaml`.
+21. **P3 uses no BTS or hub-state features.** It uses only P1's `event_features` (organiser files).
+    - Given by: ours (P3).
+    - Impact: the earlier BTS hub features gave about +0.04 PR-AUC at 3 h; a possible next step.
+22. **P3 weather-rule baseline:** `ts_flag` OR crosswind ≥ c OR tailwind ≥ t, with c and t = max F1 on train (currently 7.5 and 10.0 km/h). No climatology baseline.
+    - Where: `src/models/delay/evaluate.py` (`rule_fit`); `outputs/metrics/threshold.md`.
+    - Given by: ours.
+23. **Year-to-year shift:** the positive rate is 10.1% in train, 9.6% in validation and 13.2% in test (2025); cancellations rise from 1.1% to 2.1%.
+    - Given by: data (P1 check).
+    - Impact: probabilities may under-predict in 2025 (see `outputs/metrics/calibration.png`).

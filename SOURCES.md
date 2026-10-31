@@ -9,7 +9,7 @@ Licence/terms are quoted from each source's own website; where that could not be
 | 0 | Organiser flight + weather CSV | P1 events and targets (its weather only as `oracle_*`) | provided by organisers (not fetched) | organiser-provided |
 | 0b | Organiser hourly weather ATL/DFW + data guide | P1 weather features (the only weather source in v2) | provided by organisers (not fetched) | organiser-provided; derived from Meteostat (see #1) |
 | 1 | Meteostat hourly weather (via the organiser file) | v2: indirectly — the organiser hourly file is Meteostat/NOAA ISD | none in v2 (the v1 Meteostat fetch code was removed) | CC BY 4.0 (attribution required) |
-| 2 | BTS Reporting Carrier On-Time Performance (full months) | P3 delay model hub features | `pipeline/download.py` | not checked |
+| 2 | BTS Reporting Carrier On-Time Performance (full months) | P2 optional AAR target (arrivals per hour) | `src/models/aar_bts.py` | not checked |
 | 3 | Iowa Environmental Mesonet (IEM) ASOS/METAR archive | standalone tool, not used by any model | `src/data/fetch_weather.py` | public domain |
 
 ---
@@ -47,22 +47,20 @@ Licence/terms are quoted from each source's own website; where that could not be
   Terms: https://dev.meteostat.net/terms.html ("We cannot guarantee the accuracy or completeness…").
 - **Attribution line (use in the demo):** Source: [Meteostat](https://meteostat.net) and its
   [data providers](https://dev.meteostat.net/providers), CC BY 4.0.
-- **Also:** `pipeline/download.py:85-118` (P3's older pipeline) can fetch Meteostat with meteostat ≥ 2
-  (`WX_PARAMS` at `pipeline/download.py:35`). The delay model does **not** need it (runs with `--skip-weather`).
 
 ## 2. BTS: Reporting Carrier On-Time Performance (1987–present)
 - **Publisher:** U.S. Department of Transportation, Bureau of Transportation Statistics (BTS).
 - **Website / table page:** https://www.transtats.bts.gov/TableInfo.asp?gnoyr_VQ=FGJ
 - **Endpoint actually called:** `https://transtats.bts.gov/PREZIP/On_Time_Reporting_Carrier_On_Time_Performance_1987_present_{y}_{m}.zip`
-  (`pipeline/download.py:19-20`), one zip per month, 2023-01 to 2025-07.
-- **Fetch script:** `python -m pipeline.download --skip-weather` (`pipeline/download.py`); saved to `data/raw/bts/` (not committed).
-- **Fields used:** `pipeline/download.py:23-33` (`FLIGHT_COLS`: FlightDate, Reporting_Airline,
-  Flight_Number_Reporting_Airline, Tail_Number, Distance, Origin, Dest, CRSDepTime, DepTime, DepDelay, CRSArrTime,
-  ArrTime, ArrDelay, Cancelled, CancellationCode, Diverted, CRSElapsedTime, WeatherDelay, NASDelay).
-  Only ATL/DFW flights are kept, to build hub congestion/state features (`src/models/delay/features.py`).
-- **Why:** the organiser CSV is a ~0.5% sample, too thin to measure hub congestion.
-- **Licence:** not checked (BTS policy page https://www.bts.gov/website-policies returned HTTP 403; the table page
-  states no terms).
+  (`src/models/aar_bts.py:29-30`), one zip per month, 2023-01 to 2025-07 (`src/models/aar_config.py:24`).
+- **Fetch script:** `python -m src.models.aar_bts --start 2023-01 --end 2025-07` (resumable); filtered monthly parquet cached in
+  `data/interim/bts/` (`src/models/aar_config.py:22`, not committed). The monthly zips (~32 MB each) are not kept.
+- **Fields used:** `src/models/aar_bts.py:31-33` (FlightDate, Reporting_Airline, Flight_Number_Reporting_Airline, Origin, Dest,
+  CRSDepTime, CRSArrTime, CRSElapsedTime, ArrDelay, TaxiIn, WheelsOn, Cancelled, Diverted). Only flights to configured airports.
+- **Used by:** P2's optional arrivals (AAR) model only, as the target and recent-arrivals inputs. **Not used by the delay model (P3).**
+- **Why:** the organiser flights file is a ~0.5% sample, so hourly arrivals can't be measured from it; the data guide allows teams
+  to "pull the full BTS on-time data automatically".
+- **Licence:** not checked (BTS policy page https://www.bts.gov/website-policies returned HTTP 403; the table page states no terms).
 
 ## 3. Iowa Environmental Mesonet (IEM): ASOS/METAR archive
 - **Publisher:** Iowa Environmental Mesonet, Iowa State University.

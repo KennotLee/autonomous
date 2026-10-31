@@ -49,7 +49,7 @@ Outputs: `data/processed/event_features.parquet`, schema in CLAUDE.md.
 ## ⚠️ Known data limitations (read before modelling) — P2/P4
 
 1. **Flights file is a ~0.5% sample** (~6 ATL arrivals/day) → no hourly AAR.
-2. **The flights CSV's own weather is attached at flight time** → used only as `oracle_*` columns (never features).
+2. **The flights CSV's own weather is misaligned** (joined at the local clock hour read as UTC, so ~4–6 h *before* the event) → used only as `oracle_*` columns (never features). P3's oracle gap uses the hourly file at the event hour instead.
 3. **`wpgt_*` and `snow_*` are placeholders** → ignored. The hourly file's `wind_gust_kmh` is empty → no gust features.
 4. **Weather exists only for ATL and DFW** → `other_*` features are NaN except for ATL↔DFW flights.
 5. **Cancelled events have `label_45` = NaN** (diverted arrivals too, no ARR_DELAY); drop them or set a policy.

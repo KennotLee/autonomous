@@ -88,9 +88,18 @@ One row per (event_id, h). Events: 16,151 dep + 9,461 arr (ATL↔DFW flights giv
 | delay_min | **target**: DEP_DELAY (dep) or ARR_DELAY (arr), minutes; NaN if cancelled or no delay recorded |
 | label_45 | **target**: delay_min > 45 (1/0); NaN if delay_min NaN |
 | cancelled, diverted | 0/1 outcomes (not features) |
-| oracle_temp, oracle_prcp, oracle_wspd, oracle_pres, oracle_coco | flights-CSV weather at event time (comparison only, never features) |
+| oracle_temp, oracle_prcp, oracle_wspd, oracle_pres, oracle_coco | flights-CSV weather as attached by the organisers (comparison only, never features). **Not same-hour:** that join reads the local clock hour as UTC, so it is ~4–6 h before the event (matches the hourly file at the local-hour-as-UTC in ~44% of rows, at the true event hour in ~5%; P3 check) |
 
 Never features: ids, `sched_time_*`, `feature_obs_time`, `other_feature_obs_time`, targets, `cancelled`, `diverted`, `oracle_*`.
+## Prediction contracts (v2, 2026-10-31; replaces decision B)
+- **`outputs/predictions/delay_preds.csv` (P3, main target):** `event_id, airport, event_type, sched_time_utc, h, risk_prob,
+  high_risk, top_drivers`. One row per (event_id, h) for every 2025 row of `event_features` (join coverage 100%).
+  `high_risk` = risk_prob ≥ per-airport threshold chosen on validation (KATL 0.098, KDFW 0.123;
+  `src/models/delay/artifacts/meta.json`). Score only rows where `label_45` is not NaN. Details: `outputs/predictions/SCHEMA.md`.
+- **`outputs/predictions/aar_preds.csv` (P2, optional AAR):** `icao, target_hour_utc, h, pred_arr_count, p10, p90` + evaluation
+  columns (`split, actual_arr_count, pred_schedule, pred_persistence, pred_hist_avg, eval_hub_weather_actual`).
+  Target = realised arrivals per UTC hour from **full BTS** (`src/models/aar_bts.py`), not the sample.
+
 Dropped in v2 (organiser update): `hourly_features.parquet`, `flight_features.parquet`, arr_count, capacity_ratio,
 sched counts, all Meteostat-fetched weather.
 
@@ -220,3 +229,5 @@ C1. (organiser update) Target per event: dep → DEP_DELAY > 45, arr → ARR_DEL
 C2. Join weather on UTC (time_local has DST duplicates/gaps); flight local → UTC with hub tz; DST-ambiguous → dropped (0).
 C3. Hourly row available at time_utc + 1 h (stamp can precede the METAR by ~52 min); as-of ≤ t − h, tolerance 2 h.
 C4. Units kept as provided (km/h); coco flags use the data-guide groups; gust/snow placeholders ignored.
+C5. Optional AAR kept by P2 using full BTS (organiser: 'may pull the full BTS on-time data automatically'); the delay model
+    (P3) uses only P1's event_features. pipeline/, root run_pipeline.py, tests/test_pipeline_leakage.py, reports/ deleted (unused).
