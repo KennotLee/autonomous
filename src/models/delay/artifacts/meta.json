@@ -1,4 +1,5 @@
 {
+ "event_features_md5": "4e8b0443471c83532fd06ab3ab50b87d",
  "threshold": 0.11929191087666573,
  "val_precision": 0.21304818624796967,
  "val_recall": 0.4031762295081967,

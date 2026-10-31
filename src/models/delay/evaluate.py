@@ -7,6 +7,7 @@ slice), threshold.md, calibration.png, oracle_gap.csv, generalisation.csv,
 failure_cases.md. Thresholds and rule cut-offs never look at test data.
 """
 import json
+import warnings
 from itertools import product
 
 import lightgbm as lgb
@@ -15,7 +16,8 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, brier_score_loss
 
-from .train import MET_DIR, MODEL_DIR, PRED_DIR, ROOT, X, choose_threshold, config, feature_cols, fit, iata_to_icao, prepare
+from .train import (MET_DIR, MODEL_DIR, PRED_DIR, ROOT, X, choose_threshold, config, data_md5, feature_cols, fit,
+                    iata_to_icao, prepare)
 
 # organiser hourly weather (config weather.hourly_file; P1's weather source), used only for the true oracle
 TRUE_ORACLE = {"temp_c": "temp", "precip_mm": "prcp", "wind_speed_kmh": "wspd", "pressure_hpa": "pres",
@@ -123,6 +125,10 @@ def main():
     ev, lab, cats = prepare()
     lab = add_true_oracle(lab)
     meta = json.loads((MODEL_DIR / "meta.json").read_text())
+    md5 = data_md5()
+    if md5 != meta.get("event_features_md5"):
+        warnings.warn(f"event_features.parquet changed since training (md5 {md5} vs "
+                      f"{meta.get('event_features_md5')}): rerun python -m src.models.delay.train")
     thr, cols = meta["threshold"], meta["features"]
     model = lgb.Booster(model_file=str(MODEL_DIR / "gbm.txt"))
     tr, va = lab[lab.split == "train"], lab[lab.split == "val"]
@@ -193,7 +199,8 @@ def main():
     gap.to_csv(MET_DIR / "oracle_gap.csv", index=False, float_format="%.4f")
 
     # ---- uncertainty: day-block bootstrap (resample local scheduled dates, all events of a day together)
-    pd.DataFrame(bootstrap_ci(te)).to_csv(MET_DIR / "metrics_ci.csv", index=False, float_format="%.4f")
+    bootstrap_rows = bootstrap_ci(te)
+    pd.DataFrame(bootstrap_rows).to_csv(MET_DIR / "metrics_ci.csv", index=False, float_format="%.4f")
 
     # ---- generalisation: train on one airport, test on the other (airport is constant -> dropped)
     gcols = [c for c in cols if c != "airport"]
@@ -275,7 +282,47 @@ def main():
               "The flight CSV is a ~0.5% sample, so counts are not real daily volumes; use the rates.\n"]
     (MET_DIR / "failure_cases.md").write_text("\n".join(lines))
 
-    (MET_DIR / "notes.md").write_text(
+    # ---- cancellations: risk the model gave to 2025 events that never flew (labels stay NaN, not scored)
+    preds = pd.read_csv(PRED_DIR / "delay_preds.csv", usecols=["event_id", "h", "risk_prob"])
+    t25 = ev[ev.split == "test"].merge(preds, on=["event_id", "h"], how="left")
+    t25["status"] = np.select([t25.cancelled == 1, t25.label_45.isna(), t25.label_45 == 1],
+                              ["cancelled", "diverted arrival (no label)", "flown, delay > 45"], "flown, delay <= 45")
+    t25["flagged"] = t25.risk_prob >= t25.airport.map(by_ap).fillna(thr)
+    canc = pd.concat([t25.assign(airport="all"), t25]).groupby(["airport", "status"]).agg(
+        events=("event_id", "nunique"), mean_risk_prob=("risk_prob", "mean"),
+        share_flagged=("flagged", "mean"))
+    canc.reset_index().to_csv(MET_DIR / "cancellations.csv", index=False, float_format="%.4f")
+
+    # ---- notes for the demo (numbers computed here, not typed in)
+    e3 = ev[ev.h == 3]
+    rate = {s: (g.label_45.mean(), g.cancelled.mean()) for s, g in e3.groupby("split")}
+    cal = te.groupby(np.minimum((te.p_gbm * 10).astype(int), 9)).agg(p=("p_gbm", "mean"), y=("label_45", "mean"))
+    pr = met[(met.model == "gbm") & (met.slice == "event_type")].set_index("value").pr_auc
+    ci = pd.DataFrame(bootstrap_rows).set_index("metric")
+    fn_carriers = ", ".join(sorted(fn.carrier.unique()))
+    ca = canc.loc["all"]
+    demo = (
+        "# Notes for the demo\n\n"
+        f"- **2025 is a worse year.** Severe-delay rate: train {rate['train'][0]:.1%}, validation {rate['val'][0]:.1%}, "
+        f"test {rate['test'][0]:.1%}; cancellations {rate['train'][1]:.1%} -> {rate['val'][1]:.1%} -> "
+        f"{rate['test'][1]:.1%}. The model under-predicts in 2025: events scored 0-0.1 (mean "
+        f"{cal.p.iloc[0]:.3f}) were severely delayed {cal.y.iloc[0]:.1%} of the time; 0.1-0.2 (mean {cal.p.iloc[1]:.3f}) "
+        f"{cal.y.iloc[1]:.1%} "
+        "(see calibration.png). Read probabilities as slightly low.\n"
+        f"- **Weather explains only a small part of severe delays here.** Model vs no event-airport weather: "
+        f"{ci.loc['pr_auc gbm - no_weather', 'estimate']:+.3f} PR-AUC (95% CI "
+        f"{ci.loc['pr_auc gbm - no_weather', 'ci_low']:+.3f} to {ci.loc['pr_auc gbm - no_weather', 'ci_high']:+.3f}). "
+        "Bad weather does matter when it happens (see the wx_* slices in metrics.csv), but it is rare. The worst "
+        f"misses (failure_cases.md) are calm-weather flights (carrier {fn_carriers}); their cause is not in our data "
+        "(possibly late inbound aircraft or airline operations, which we cannot observe).\n"
+        f"- **Arrivals are weaker than departures** (PR-AUC {pr['arr']:.3f} vs {pr['dep']:.3f}): the hourly file only "
+        "covers ATL/DFW, so the weather at an arrival's origin is unknown.\n"
+        f"- **Cancellations are not scored** (organiser: label NaN), but they get a forecast. Mean risk_prob in 2025: "
+        f"cancelled {ca.loc['cancelled', 'mean_risk_prob']:.3f} ({ca.loc['cancelled', 'events']} events) vs flown "
+        f"{t25[t25.label_45.notna()].risk_prob.mean():.3f}; cancellations look like high-risk events "
+        "(cancellations.csv).\n"
+        "- **Alerts:** about 4 of 5 alerts are false at the chosen thresholds (failure_cases.md, alert workload).\n\n")
+    (MET_DIR / "notes.md").write_text(demo +
         "# Notes on the metrics\n\n"
         "- **Oracle gap uses the true event-hour weather.** `pr_auc_true_oracle` = same model with all lagged "
         "event-airport weather replaced by the organiser hourly file at floor(sched_time_utc) (the file P1's weather "

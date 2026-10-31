@@ -12,6 +12,7 @@ Output: outputs/predictions/delay_preds.csv = event_id, airport, event_type, sch
 risk_prob, high_risk, top_drivers (schema: outputs/predictions/SCHEMA.md)
 for every 2025 row of event_features (join coverage asserted 100%).
 """
+import hashlib
 import io
 import json
 import subprocess
@@ -43,11 +44,18 @@ def _p1_blob(path: str) -> bytes:
     return subprocess.run(["git", "show", f"origin/p1:{path}"], cwd=ROOT, capture_output=True, check=True).stdout
 
 
-def load() -> pd.DataFrame:
+def _data_bytes() -> bytes:
     """P1's file; if it isn't checked out locally, read it from origin/p1."""
-    if DATA.exists():
-        return pd.read_parquet(DATA)
-    return pd.read_parquet(io.BytesIO(_p1_blob("data/processed/event_features.parquet")))
+    return DATA.read_bytes() if DATA.exists() else _p1_blob("data/processed/event_features.parquet")
+
+
+def load() -> pd.DataFrame:
+    return pd.read_parquet(io.BytesIO(_data_bytes()))
+
+
+def data_md5() -> str:
+    """Provenance: md5 of the event_features.parquet bytes the model was trained on."""
+    return hashlib.md5(_data_bytes()).hexdigest()
 
 
 def config() -> dict:
@@ -162,7 +170,8 @@ def main():
 
     m.booster_.save_model(str(MODEL_DIR / "gbm.txt"))
     (MODEL_DIR / "meta.json").write_text(json.dumps(
-        {"threshold": thr, "val_precision": vp, "val_recall": vr, "thresholds_by_airport": by_ap, "features": cols,
+        {"event_features_md5": data_md5(), "threshold": thr, "val_precision": vp, "val_recall": vr,
+         "thresholds_by_airport": by_ap, "features": cols,
          "best_iteration": m.best_iteration_, "train_end": str(TRAIN_END), "val_end": str(VAL_END)}, indent=1))
 
 
