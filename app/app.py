@@ -309,6 +309,7 @@ with tabs[0]:
                 caution.append("")
         view = pd.DataFrame({
             "event_id": order["event_id"],
+            "decision": "—",
             "time": order["sched_time_local"].dt.strftime("%H:%M"),
             "flight": np.where(order["event_type"] == "dep", "🛫 ", "🛬 ") + order["carrier"] + " "
                       + np.where(order["event_type"] == "dep", "→ ", "← ") + order["other_airport"],
@@ -318,7 +319,7 @@ with tabs[0]:
             "why (model)": order["why"],
             "weather used (obs ≤ t−h)": order["weather"],
             "caution": caution,
-            "decision": "—", "note": ""})
+            "note": ""})
         if reveal:
             view["outcome"] = np.select(
                 [order["cancelled"] == 1, order["diverted"] == 1, order["label_45"] == 1, order["label_45"] == 0],
@@ -326,6 +327,11 @@ with tabs[0]:
                  "on time (" + order["delay_min"].round().astype("Int64").astype(str) + " min)"], "—")
         if not any(caution):
             view = view.drop(columns="caution")
+        b1, b2 = st.columns([1, 4])
+        log_clicked = b1.button("✅ Log my decisions", type="primary")
+        b2.caption("Pick **Act / Watch / Override** in the first column (add a note if you like), then log. "
+                   "Nothing happens until you decide.")
+        log_msg = st.container()
         edited = st.data_editor(
             view, hide_index=True, width="stretch", key=f"ed_{icao}_{day}_{h}",
             disabled=[c for c in view.columns if c not in ("decision", "note")],
@@ -340,19 +346,19 @@ with tabs[0]:
                     help="The exact hourly observation the forecast used, and when it was observed. ⚠ = adverse."),
                 "decision": st.column_config.SelectboxColumn(options=DECISIONS, required=True),
             })
-        if st.button("✅ Log my decisions", type="primary"):
+        if log_clicked:  # handled after the editor so it sees this run's edits; messages show above the table
             chosen = edited[edited["decision"] != "—"]
             if not user.strip():
-                st.warning("Enter your name in the sidebar first: every decision is attributed.")
+                log_msg.warning("Enter your name in the sidebar first: every decision is attributed.")
             elif chosen.empty:
-                st.warning("Pick a decision for at least one flight.")
+                log_msg.warning("Pick a decision for at least one flight.")
             else:
                 rows = chosen.merge(order[["event_id", "risk_prob", "feature_obs_time"]], on="event_id").assign(
                     logged_at_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), user=user.strip(),
                     airport=icao, h=h, threshold=thr, model_version=model_version)
                 rows[["logged_at_utc", "user", "airport", "h", "event_id", "risk_prob", "threshold", "feature_obs_time",
                       "decision", "note", "model_version"]].to_csv(LOG, mode="a", header=not LOG.exists(), index=False)
-                st.success(f"Logged {len(rows)} decision(s).")
+                log_msg.success(f"Logged {len(rows)} decision(s).")
         st.caption(f"{SRC} Risk: P3 LightGBM ({model_version}); flights shown are a ~0.5% sample of real traffic.")
         with st.expander("Decision log"):
             if LOG.exists():
