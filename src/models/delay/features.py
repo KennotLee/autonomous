@@ -1,133 +1,91 @@
-"""Per-flight, leakage-safe features for P(arrival delay > 45 min).
+"""Delay-model inputs: P1's flight_features.parquet plus P3 hub features.
 
-Reference time: the flight's scheduled ARRIVAL (UTC); the label is ARR_DELAY > 45.
-For horizon h the forecast is issued at t0 = sched_arr_utc - h, and every
-weather/ops input comes from state row k = floor(t0) - 1 h: weather observed
-at k and hub flight counts for [k, k+1), all complete by t0.
-Known-in-advance inputs: the schedule (hub congestion at the flight's hub hour),
-carrier, distance, block time, calendar.
-`now_*` columns are weather at the flight's own scheduled hour at each end:
-oracle only, never used by the production model.
+P1 contract (CLAUDE.md, branch p1): one row per flight x h, t = sched_time_utc
+(scheduled departure), weather at both ends as of t - h, label_45 = ARR_DELAY > 45
+(NaN if cancelled/diverted), oracle_* = same-hour weather (oracle only).
+
+P3 adds, per flight and h, for the hub end (ATL/DFW) of the flight:
+  hub_sched_arr / hub_sched_dep  scheduled movements at the hub in the hour the
+                                 flight uses it (schedule: known in advance)
+  hub_<ops>                      hub state in the last full hour before t - h:
+                                 capacity ratio, severe-delay share, cancellations,
+                                 mean arrival/departure delay (3 h pooled)
+  {origin,dest}_ts, _heavy_precip  flags derived from P1's coco
+The hub features need the full BTS months (python -m pipeline.download); the
+team CSV is a 0.5% sample, so its own counts can't measure congestion.
 """
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
-from pipeline.features import add_history, ops_state, weather_state
+from pipeline.features import ops_state
 from pipeline.panel import add_local_times, build_panel, load_flights
 
 from . import airports
-from .weather import fetch
 
-HORIZONS = [3, 6, 9, 12]           # team contract (README)
-SEVERE_MIN = 45
-WX_FEATS = ["temp", "dewpt_spread", "prcp", "pres", "vsby", "cldc", "wspd_kt", "gust_kt",
-            "cross_kt", "tail_kt", "head_kt", "ts", "winter", "fog", "heavy_precip",
-            "dp_3h", "dp_6h", "prcp_3h", "prcp_6h", "ts_3h", "ts_6h", "ts_24h",
-            "gust_max_3h", "cross_max_3h", "vsby_min_3h"]
-ORACLE_FEATS = ["prcp", "wspd_kt", "gust_kt", "cross_kt", "vsby", "ts", "heavy_precip", "winter"]
+ROOT = Path(__file__).resolve().parents[3]
+P1_FILE = ROOT / "data" / "processed" / "flight_features.parquet"
+BTS_DIR = ROOT / "data" / "raw" / "bts"
+HORIZONS = [3, 6, 9, 12]
 OPS_FEATS = ["cap_ratio_3h", "sev_rate_3h", "cancel_rate_3h", "arr_delay_mean", "dep_delay_mean"]
+COCO_TS = [23, 24, 25, 26, 27]
+COCO_HEAVY = [9, 11, 13, 16, 18, 20, 22, 26]
+
+# P1 columns that are targets/outcomes/ids, never features
+TARGETS = ["delay_min", "label_45", "cancelled", "diverted"]
+IDS = ["flight_id", "origin_icao", "dest_icao", "sched_time_utc", "sched_arr_utc", "feature_obs_time",
+       "origin_feature_obs_time", "dest_feature_obs_time"]
 
 
-def flight_id(df: pd.DataFrame) -> pd.Series:
-    """date_carrier_flightnumber_origin_dest; identical for BTS and the team CSV."""
-    return (df.FL_DATE.dt.strftime("%Y-%m-%d") + "_" + df.OP_UNIQUE_CARRIER.astype(str) + "_"
-            + df.OP_CARRIER_FL_NUM.astype("Int64").astype(str) + "_" + df.ORIGIN + "_" + df.DEST)
+def load_p1() -> pd.DataFrame:
+    fl = pd.read_parquet(P1_FILE)
+    hubs = airports.hubs()
+    fl["hub"] = np.where(fl.dest_icao.isin(hubs), fl.dest_icao, fl.origin_icao)
+    fl["arr_to_hub"] = fl.dest_icao.isin(hubs).astype(int)
+    for end in ("origin", "dest"):
+        fl[f"{end}_ts"] = fl[f"{end}_coco"].isin(COCO_TS).astype(float).where(fl[f"{end}_coco"].notna())
+        fl[f"{end}_heavy_precip"] = fl[f"{end}_coco"].isin(COCO_HEAVY).astype(float).where(fl[f"{end}_coco"].notna())
+    return fl
 
 
-def _localize(local: pd.Series, codes: pd.Series) -> pd.Series:
-    """Naive local timestamps -> UTC, using each row's airport timezone."""
-    tz = codes.map(lambda c: airports.get(c).tz)
-    out = pd.Series(pd.NaT, index=local.index, dtype="datetime64[ns, UTC]")
-    for z, idx in tz.groupby(tz).groups.items():
-        out.loc[idx] = local.loc[idx].dt.tz_localize(z, ambiguous="NaT", nonexistent="shift_forward").dt.tz_convert("UTC")
-    return out
-
-
-def load_hub_flights() -> pd.DataFrame:
-    hub_codes = list(airports.hubs())
-    f = add_local_times(load_flights("bts"))
-    f = f[f.ORIGIN.isin(hub_codes) | f.DEST.isin(hub_codes)].copy()
-    f["flight_id"] = flight_id(f)
-    f = f.drop_duplicates("flight_id")
-    f["sched_dep_utc"] = _localize(f.sched_dep, f.ORIGIN)
-    f["sched_arr_utc"] = _localize(f.sched_arr, f.DEST)
-    f["hub"] = np.where(f.DEST.isin(hub_codes), f.DEST, f.ORIGIN)
-    f["arr_to_hub"] = f.DEST.isin(hub_codes).astype(int)
-    f["label"] = (f.ARR_DELAY > SEVERE_MIN).astype(float).where(f.ARR_DELAY.notna())
-    return f
-
-
-def _wx_table(codes) -> pd.DataFrame:
-    """Stacked hourly weather state for many airports, keyed (iata, hour)."""
+def _hub_panels() -> pd.DataFrame:
+    flights = add_local_times(load_flights("bts"))
     frames = []
-    for c in sorted(codes):
-        try:
-            wx = fetch(airports.get(c), "2023-01", "2025-07")
-        except Exception:
-            continue  # airport without weather: its features stay NaN
-        a = airports.get(c)
-        heading = a.runway_heading if a.runway_heading is not None else np.nan
-        idx = pd.date_range(wx.index.min(), wx.index.max(), freq="h", name="hour_utc")
-        s = add_history(weather_state(wx.reindex(idx), type("A", (), {"runway_heading": heading})))
-        s = s[WX_FEATS].astype("float32")
-        s["iata"] = c
-        frames.append(s.reset_index())
-    return pd.concat(frames, ignore_index=True)
-
-
-def _hub_tables(flights_all: pd.DataFrame) -> pd.DataFrame:
-    frames = []
-    for code, a in airports.hubs().items():
-        panel = build_panel(flights_all, a)
+    for icao, a in airports.hubs().items():
+        panel = build_panel(flights, a)
         idx = pd.date_range(panel.index.min(), panel.index.max(), freq="h", name="hour_utc")
-        o = ops_state(panel.reindex(idx))[OPS_FEATS].astype("float32")
-        o["sched_arr_hr"] = panel.sched_arr.reindex(idx)
-        o["sched_dep_hr"] = panel.sched_dep.reindex(idx)
-        o["hub"] = code
+        p = panel.reindex(idx)
+        o = ops_state(p)[OPS_FEATS].astype("float32")
+        o["sched_arr"], o["sched_dep"] = p.sched_arr, p.sched_dep
+        o["hub"] = icao
         frames.append(o.reset_index())
     return pd.concat(frames, ignore_index=True)
 
 
-def build(flights: pd.DataFrame, flights_all: pd.DataFrame, horizons=HORIZONS) -> pd.DataFrame:
-    """One row per (flight, h). `flights_all` (every hub flight) feeds the hub
-    congestion/ops panel; `flights` is the subset to featurise."""
-    wx = _wx_table(set(flights.ORIGIN) | set(flights.DEST))
-    hub = _hub_tables(flights_all)
+def add_hub_features(fl: pd.DataFrame) -> pd.DataFrame:
+    if not any(BTS_DIR.glob("*.parquet")):
+        print("no BTS files: skipping hub congestion/state features")
+        return fl
+    hub = _hub_panels()
+    # congestion at the hub hour the flight uses (arrival hour if inbound, else departure hour)
+    fl["_hub_hour"] = np.where(fl.arr_to_hub == 1, fl.sched_arr_utc.dt.floor("h"), fl.sched_time_utc.dt.floor("h"))
+    fl["_hub_hour"] = pd.to_datetime(fl._hub_hour, utc=True)
+    sched = hub[["hub", "hour_utc", "sched_arr", "sched_dep"]].rename(
+        columns={"hour_utc": "_hub_hour", "sched_arr": "hub_sched_arr", "sched_dep": "hub_sched_dep"})
+    fl = fl.merge(sched, on=["hub", "_hub_hour"], how="left")
+    # live hub state: hour bucket [k, k+1) with k + 1 <= t - h, so it is complete at issue time
+    fl["_ops_hour"] = (fl.sched_time_utc - pd.to_timedelta(fl.h, unit="h")).dt.floor("h") - pd.Timedelta(hours=1)
+    ops = hub[["hub", "hour_utc"] + OPS_FEATS].rename(
+        columns={"hour_utc": "_ops_hour"} | {c: f"hub_{c}" for c in OPS_FEATS})
+    fl = fl.merge(ops, on=["hub", "_ops_hour"], how="left")
+    return fl.drop(columns=["_hub_hour", "_ops_hour"])
 
-    base = flights[["flight_id", "ORIGIN", "DEST", "hub", "arr_to_hub", "OP_UNIQUE_CARRIER",
-                    "DISTANCE", "CRS_ELAPSED_TIME", "sched_dep_utc", "sched_arr_utc",
-                    "sched_arr", "ARR_DELAY", "label"]].copy()
-    base["hour_local"] = base.sched_arr.dt.hour
-    base["dow"] = base.sched_arr.dt.dayofweek
-    base["month"] = base.sched_arr.dt.month
-    # schedule congestion at the hub in the hour the flight uses it (known in advance)
-    base["hub_hour_utc"] = np.where(base.arr_to_hub == 1, base.sched_arr_utc.dt.floor("h"),
-                                    base.sched_dep_utc.dt.floor("h"))
-    base["hub_hour_utc"] = pd.to_datetime(base.hub_hour_utc, utc=True)
-    sched = hub[["hub", "hour_utc", "sched_arr_hr", "sched_dep_hr"]].rename(
-        columns={"hour_utc": "hub_hour_utc", "sched_arr_hr": "hub_sched_arr", "sched_dep_hr": "hub_sched_dep"})
-    base = base.merge(sched, on=["hub", "hub_hour_utc"], how="left")
 
-    # oracle: weather at each end in the flight's own scheduled hour
-    for end, code, col in (("dest", "DEST", "sched_arr_utc"), ("origin", "ORIGIN", "sched_dep_utc")):
-        w = wx[["iata", "hour_utc"] + ORACLE_FEATS].rename(
-            columns={c: f"now_{end}_{c}" for c in ORACLE_FEATS})
-        base["_k"] = base[col].dt.floor("h")
-        base = base.merge(w, left_on=[code, "_k"], right_on=["iata", "hour_utc"],
-                          how="left").drop(columns=["iata", "hour_utc", "_k"])
-
-    out = []
-    for h in horizons:
-        d = base.copy()
-        d["h"] = h
-        d["issue_time_utc"] = d.sched_arr_utc - pd.Timedelta(hours=h)
-        d["feature_obs_time"] = d.issue_time_utc.dt.floor("h") - pd.Timedelta(hours=1)
-        for end, code in (("origin", "ORIGIN"), ("dest", "DEST")):
-            w = wx.rename(columns={c: f"{end}_{c}" for c in WX_FEATS})
-            d = d.merge(w, left_on=[code, "feature_obs_time"], right_on=["iata", "hour_utc"],
-                        how="left").drop(columns=["iata", "hour_utc"])
-        o = hub[["hub", "hour_utc"] + OPS_FEATS].rename(columns={c: f"hub_{c}" for c in OPS_FEATS})
-        d = d.merge(o, left_on=["hub", "feature_obs_time"], right_on=["hub", "hour_utc"],
-                    how="left").drop(columns=["hour_utc"])
-        out.append(d)
-    return pd.concat(out, ignore_index=True)
+def feature_cols(df: pd.DataFrame, oracle=False, p1_only=False) -> list[str]:
+    cols = [c for c in df.columns if c not in TARGETS + IDS + ["split"]]
+    if not oracle:
+        cols = [c for c in cols if not c.startswith("oracle_")]
+    if p1_only:
+        cols = [c for c in cols if not c.startswith("hub_") or c == "hub"]
+    return cols
