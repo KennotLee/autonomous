@@ -12,3 +12,6 @@ __pycache__/
 .DS_Store
 .ipynb_checkpoints/
 reports/*.parquet
+
+# P4 dashboard runtime log
+app/decision_log.csv
